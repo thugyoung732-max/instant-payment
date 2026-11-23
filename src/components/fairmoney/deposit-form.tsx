@@ -9,7 +9,7 @@ import { toast } from "sonner";
 import { AnimatedAmount } from "@/components/fairmoney/animated-amount";
 import { Magnetic } from "@/components/fairmoney/magnetic";
 import { formatUSD, parseAmountToCents } from "@/lib/money";
-import { depositAction } from "@/server/actions/wallet";
+import { depositAction } from "@/lib/actions/wallet";
 
 type ReceiptData = {
   reference: string;

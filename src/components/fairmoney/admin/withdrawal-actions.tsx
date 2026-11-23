@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
 
-import { resolveWithdrawalAction } from "@/server/actions/admin";
+import { resolveWithdrawalAction } from "@/lib/actions/admin";
 
 export function WithdrawalActions({
   transactionId,

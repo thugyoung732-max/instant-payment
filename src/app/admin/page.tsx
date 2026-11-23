@@ -1,10 +1,11 @@
 import React from 'react';
 
-import { FlaskConical, LogOut, Search } from "lucide-react";
+import { FlaskConical, Search } from "lucide-react";
 import Link from "next/link";
 
 import { Avatar } from "@/components/fairmoney/avatar";
 import { BrandMark } from "@/components/fairmoney/brand";
+import { ChatPanel } from "@/components/fairmoney/admin/chat-panel";
 import {
   CodeRowActions,
   CodeStatusBadge,
@@ -12,35 +13,43 @@ import {
   SeedDepositCodesButton,
   type DepositCodeRow,
 } from "@/components/fairmoney/admin/deposit-code-panel";
-import { ChatPanel } from "@/components/fairmoney/admin/chat-panel";
+import { ExportCsvButton } from "@/components/fairmoney/admin/export-csv-button";
 import {
   ClearTransactionsButton,
   DeleteTransactionButton,
 } from "@/components/fairmoney/admin/transaction-actions";
+import { SeedDemoAccountsButton, UserRowActions } from "@/components/fairmoney/admin/user-row-actions";
 import { WithdrawalActions } from "@/components/fairmoney/admin/withdrawal-actions";
-import {
-  SeedDemoAccountsButton,
-  UserRowActions,
-} from "@/components/fairmoney/admin/user-row-actions";
+import { SignOutButton } from "@/components/fairmoney/sign-out-button";
 import { Badge } from "@/components/ui/badge";
-import { logOutAction } from "@/server/actions/auth";
-import { requireAdmin } from "@/lib/auth";
-import { chatIsLive, getChatSettings } from "@/lib/chat";
+import { requireAdminProfile } from "@/lib/auth";
+import { chatIsLive } from "@/lib/chat";
 import { chatScriptUrl, type ChatProviderId } from "@/lib/chat-config";
-import { formatShortDateTime } from "@/lib/datetime";
-import { DEMO_PASSWORD } from "@/lib/demo-accounts";
-import { formatUSD } from "@/lib/money";
 import {
   getAdminOverview,
   getAdminTransactions,
   getAdminUsers,
+  getChatSettings,
   getDepositCodes,
   getPendingWithdrawals,
   getTransactionCounts,
   type AdminTransactionFilter,
-} from "@/lib/queries";
+  type AdminTransactionRow,
+} from "@/lib/data/queries";
+import { formatShortDateTime } from "@/lib/datetime";
+import { DEMO_PASSWORD } from "@/lib/demo-accounts";
+import { formatUSD } from "@/lib/money";
 
-export const metadata = { title: "Operations console — INSTANT PAYMENT" };
+/**
+ * Operations console.
+ *
+ * The page is a server component: every table is fetched under the
+ * administrator's own Supabase session, so Row Level Security — not the markup —
+ * decides what can be read. Actions are server actions that call `admin_*`
+ * database functions, and those functions re-check `is_admin` themselves. A
+ * customer who reaches this URL is redirected before any of this renders, and a
+ * customer who forges an action still fails inside Postgres.
+ */
 
 const TABS = [
   { id: "overview", label: "Overview" },
@@ -68,21 +77,25 @@ const STATE_COLOR: Record<string, string> = {
   FAILED: "text-red-300",
 };
 
+function single(value: string | string[] | undefined): string {
+  return (Array.isArray(value) ? value[0] : value) ?? "";
+}
+
 export default async function AdminPage({
   searchParams,
 }: {
-  searchParams: Promise<{ tab?: string; q?: string; filter?: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const admin = await requireAdmin();
+  const admin = await requireAdminProfile();
   const params = await searchParams;
-  const tab: TabId = TABS.some((item) => item.id === params.tab)
-    ? (params.tab as TabId)
-    : "overview";
-  const query = params.q ?? "";
-  const ledgerFilter: AdminTransactionFilter = LEDGER_FILTERS.some(
-    (item) => item.id === params.filter,
-  )
-    ? (params.filter as AdminTransactionFilter)
+
+  const tabValue = single(params.tab);
+  const filterValue = single(params.filter);
+  const query = single(params.q);
+
+  const tab: TabId = TABS.some((item) => item.id === tabValue) ? (tabValue as TabId) : "overview";
+  const ledgerFilter: AdminTransactionFilter = LEDGER_FILTERS.some((item) => item.id === filterValue)
+    ? (filterValue as AdminTransactionFilter)
     : "all";
 
   const tabHref = (id: TabId) => (id === "overview" ? "/admin" : `/admin?tab=${id}`);
@@ -117,15 +130,7 @@ export default async function AdminPage({
           >
             Open wallet
           </Link>
-          <form action={logOutAction}>
-            <button
-              type="submit"
-              className="inline-flex items-center gap-1.5 rounded-xl border border-white/12 px-3.5 py-2.5 font-display text-[12.5px] font-semibold text-white/70 transition-colors hover:bg-white/8"
-            >
-              <LogOut className="h-3.5 w-3.5" />
-              Sign out
-            </button>
-          </form>
+          <SignOutButton className="inline-flex items-center gap-1.5 rounded-xl border border-white/12 px-3.5 py-2.5 font-display text-[12.5px] font-semibold text-white/70 transition-colors hover:bg-white/8" />
         </div>
 
         <nav className="mx-auto flex max-w-6xl gap-2 overflow-x-auto px-6 pb-4 lg:px-8">
@@ -245,12 +250,7 @@ async function UsersTab({ query }: { query: string }) {
             className="w-72 rounded-xl border border-white/10 bg-white/5 py-2.5 pl-10 pr-3.5 text-[12.5px] text-white outline-none placeholder:text-white/30 focus:border-fm-green-bright/50"
           />
         </form>
-        <a
-          href="/admin/audit/export?scope=profiles"
-          className="rounded-full border border-fm-lime/30 bg-fm-lime/12 px-4 py-2 font-display text-[12.5px] font-semibold text-fm-lime transition-colors hover:bg-fm-lime/20"
-        >
-          Export profiles CSV
-        </a>
+        <ExportCsvButton scope="profiles" profiles={users} />
       </section>
 
       <div className="overflow-hidden rounded-2xl border border-white/8 bg-[#0e1a16]">
@@ -284,7 +284,7 @@ async function UsersTab({ query }: { query: string }) {
                           {user.isAdmin ? (
                             <Badge
                               variant="outline"
-                              className="border-fm-lime/30 bg-fm-lime/12 font-mono text-[9.5px] uppercase tracking-[0.12em] text-fm-lime"
+                              className="border-fm-lime/30 bg-fm-lime/12 px-2 py-0.5 font-mono text-[9.5px] uppercase tracking-[0.1em] text-fm-lime"
                             >
                               admin
                             </Badge>
@@ -369,9 +369,9 @@ async function CodesTab() {
           </h3>
           <ol className="mt-3.5 space-y-3 text-[12px] leading-relaxed text-white/55">
             <li>1 · The user submits the code from the app.</li>
-            <li>2 · The server looks the code up and rejects unknown or disabled codes.</li>
+            <li>2 · The database looks the code up and rejects unknown or disabled codes.</li>
             <li>
-              3 · Redemption capacity is claimed with a conditional update, so a single-use code can
+              3 · Redemption capacity is claimed while the row is locked, so a single-use code can
               never be redeemed twice — even by concurrent requests.
             </li>
             <li>4 · Only then is the balance credited and a deposit row written.</li>
@@ -453,9 +453,8 @@ async function WithdrawalsTab() {
         <h1 className="font-display text-[26px] font-semibold leading-tight">Withdrawals</h1>
         <p className="mt-2 max-w-2xl text-[12.5px] leading-relaxed text-white/55">
           Requests hold the exact amount against the user&apos;s balance while they wait, and no fee
-          is charged on a payout. Resolving a request only changes its database status — nothing is
-          ever disbursed to a bank, card or wallet. Failing a request releases the hold back to the
-          user.
+          is charged on a payout. Resolving a request only changes its status — nothing is ever
+          disbursed to a bank, card or wallet. Failing a request releases the hold back to the user.
         </p>
       </section>
 
@@ -544,6 +543,7 @@ async function WithdrawalsTab() {
 
 async function ChatTab() {
   const settings = await getChatSettings();
+
   const loaderUrl = chatScriptUrl({
     enabled: settings.enabled,
     provider: settings.provider as ChatProviderId,
@@ -625,12 +625,7 @@ async function LedgerTab({ filter, query }: { filter: AdminTransactionFilter; qu
         </nav>
 
         <div className="flex flex-wrap items-center justify-end gap-2">
-          <a
-            href="/admin/audit/export?scope=ledger"
-            className="rounded-full border border-fm-lime/30 bg-fm-lime/12 px-4 py-2 font-display text-[12.5px] font-semibold text-fm-lime transition-colors hover:bg-fm-lime/20"
-          >
-            Export ledger CSV
-          </a>
+          <ExportCsvButton scope="ledger" transactions={transactions} />
           <ClearTransactionsButton
             total={counts.total}
             settled={counts.settled}
@@ -651,7 +646,7 @@ function LedgerTable({
   footer,
 }: {
   title?: string;
-  transactions: Awaited<ReturnType<typeof getAdminTransactions>>;
+  transactions: AdminTransactionRow[];
   footer?: React.ReactNode;
 }) {
   return (

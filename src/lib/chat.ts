@@ -1,6 +1,10 @@
-import "server-only";
-
-import { cache } from "react";
+/**
+ * Live-chat configuration helpers.
+ *
+ * The console owns one settings row in Supabase; customers read the browser-safe
+ * projection of it. Loader resolution stays identical to before, so the widget
+ * behaves exactly as it did when the settings lived in the database.
+ */
 
 import {
   normalizeLoaderUrl,
@@ -8,74 +12,33 @@ import {
   type ChatConfig,
   type ChatProviderId,
 } from "@/lib/chat-config";
-import { prisma } from "@/lib/prisma";
+import type { ChatSettingsRecord } from "@/lib/data/types";
 
-export type ChatSettingsRecord = {
-  id: string;
-  enabled: boolean;
-  provider: string;
-  primaryKey: string | null;
-  secondaryKey: string | null;
-  customScriptUrl: string | null;
-  accentColor: string;
-  position: string;
-  welcomeMessage: string | null;
-};
+export type { ChatSettingsRecord };
 
-/**
- * The chat integration is a single configuration row. It is created on first
- * read (disabled, no provider key) so the console always has something to edit.
- * Cached per request because the root layout and the console both read it.
- */
-export const getChatSettings = cache(async (): Promise<ChatSettingsRecord> => {
-  const existing = await prisma.chatSettings.findFirst({ orderBy: { updatedAt: "desc" } });
-
-  const record =
-    existing ??
-    (await prisma.chatSettings.create({
-      data: {},
-      select: {
-        id: true,
-        enabled: true,
-        provider: true,
-        primaryKey: true,
-        secondaryKey: true,
-        customScriptUrl: true,
-        accentColor: true,
-        position: true,
-        welcomeMessage: true,
-      },
-    }));
-
-  return record as ChatSettingsRecord;
-});
-
-const DISABLED_DEFAULTS: ChatSettingsRecord = {
-  id: "unconfigured",
+export const DISABLED_CHAT_SETTINGS: ChatSettingsRecord = {
+  id: "default",
   enabled: false,
-  provider: "custom",
+  provider: "smartsupp",
   primaryKey: null,
   secondaryKey: null,
   customScriptUrl: null,
   accentColor: "#0f8a5f",
-  position: "bottom-right",
+  position: "right",
   welcomeMessage: null,
 };
 
-/**
- * Chat settings for the public layout. Unlike {@link getChatSettings} this never
- * throws: on a cold start the database can lag behind the Next.js server, and a
- * failed chat read must not 500 every page (which makes the app look "stuck on
- * deploying"). A transient failure simply disables the widget for that request.
- */
-export const getChatSettingsSafe = cache(async (): Promise<ChatSettingsRecord> => {
-  try {
-    return await getChatSettings();
-  } catch (error) {
-    console.error("[chat] chat settings unavailable, using disabled fallback:", error);
-    return DISABLED_DEFAULTS;
-  }
-});
+/** Fills in defaults for anything the row left empty. */
+export function normaliseChatSettings(record: ChatSettingsRecord | null): ChatSettingsRecord {
+  if (!record) return DISABLED_CHAT_SETTINGS;
+
+  return {
+    ...record,
+    provider: record.provider || "smartsupp",
+    accentColor: record.accentColor || "#0f8a5f",
+    position: record.position === "left" ? "left" : "right",
+  };
+}
 
 /** The subset of settings the browser needs to load a provider widget. */
 export function chatConfigFrom(record: ChatSettingsRecord): ChatConfig {
@@ -94,5 +57,3 @@ export function chatIsLive(record: ChatSettingsRecord): boolean {
   if (record.provider === "custom") return Boolean(normalizeLoaderUrl(record.customScriptUrl));
   return Boolean(normalizeProviderKey(record.provider as ChatProviderId, record.primaryKey));
 }
-
-

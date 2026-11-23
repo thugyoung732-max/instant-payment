@@ -3,11 +3,9 @@ import React from 'react';
 import Link from "next/link";
 
 import { TransactionList } from "@/components/fairmoney/transaction-list";
-import { requireUser } from "@/lib/auth";
+import { requireProfile } from "@/lib/auth";
+import { getActivity, getWalletSummary, type ActivityFilter } from "@/lib/data/queries";
 import { formatUSD } from "@/lib/money";
-import { getActivity, getWalletSummary, type ActivityFilter } from "@/lib/queries";
-
-export const metadata = { title: "Activity — INSTANT PAYMENT" };
 
 const FILTERS: Array<{ id: ActivityFilter; label: string }> = [
   { id: "all", label: "All" },
@@ -23,15 +21,17 @@ function isFilter(value: string | undefined): value is ActivityFilter {
 export default async function ActivityPage({
   searchParams,
 }: {
-  searchParams: Promise<{ type?: string }>;
+  searchParams: Promise<{ type?: string | string[] }>;
 }) {
-  const user = await requireUser();
+  const profile = await requireProfile();
   const params = await searchParams;
-  const filter: ActivityFilter = isFilter(params.type) ? params.type : "all";
+  const requested = Array.isArray(params.type) ? params.type[0] : params.type;
+
+  const filter: ActivityFilter = isFilter(requested) ? requested : "all";
 
   const [activity, summary] = await Promise.all([
-    getActivity(user.id, { limit: 60, filter }),
-    getWalletSummary(user.id, user.balanceCents),
+    getActivity(profile.id, { limit: 60, filter }),
+    getWalletSummary(profile.id),
   ]);
 
   return (
@@ -103,7 +103,7 @@ function Total({
     <div className="px-5 py-6">
       <p className="fm-label">{label}</p>
       <p
-        className={`fm-numeric mt-3 font-display text-[18px] font-semibold leading-none ${toneClass}`}
+        className={`fm-numeric mt-3 font-display text-[17px] font-semibold leading-none ${toneClass}`}
       >
         {value}
       </p>

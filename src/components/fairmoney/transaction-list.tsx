@@ -16,7 +16,7 @@ import { Avatar } from "@/components/fairmoney/avatar";
 import { Badge } from "@/components/ui/badge";
 import { formatShortDateTime } from "@/lib/datetime";
 import { formatUSD } from "@/lib/money";
-import type { ActivityItem, TransactionKind, TransactionState } from "@/lib/queries";
+import type { ActivityItem, TransactionKind, TransactionState } from "@/lib/data/queries";
 import { cn } from "@/lib/utils";
 
 const TYPE_LABELS: Record<TransactionKind, string> = {

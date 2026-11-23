@@ -3,12 +3,10 @@ import React from 'react';
 import { Info } from "lucide-react";
 
 import { WithdrawForm } from "@/components/fairmoney/withdraw-form";
-import { requireUser } from "@/lib/auth";
-
-export const metadata = { title: "Withdraw — Instant Payment" };
+import { requireProfile } from "@/lib/auth";
 
 export default async function WithdrawPage() {
-  const user = await requireUser();
+  const profile = await requireProfile();
 
   return (
     <div className="space-y-8">
@@ -23,7 +21,7 @@ export default async function WithdrawPage() {
         </p>
       </header>
 
-      <WithdrawForm balanceCents={user.balanceCents} />
+      <WithdrawForm balanceCents={profile.balanceCents} />
 
       <p className="fm-notice border border-border bg-card/70 text-muted-foreground">
         <Info className="mt-0.5 h-4 w-4 shrink-0" />

@@ -18,7 +18,7 @@ import {
   adminCreditAction,
   adminResetBalanceAction,
   seedDemoAccountsAction,
-} from "@/server/actions/admin";
+} from "@/lib/actions/admin";
 
 const PRESETS = [5000, 25000, 100000, 500000];
 

@@ -13,7 +13,7 @@ import {
   deleteDepositCodeAction,
   seedDepositCodesAction,
   setDepositCodeActiveAction,
-} from "@/server/actions/admin";
+} from "@/lib/actions/admin";
 
 export type DepositCodeRow = {
   id: string;

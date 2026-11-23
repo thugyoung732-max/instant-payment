@@ -7,7 +7,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 
 import { formatUSD } from "@/lib/money";
-import { clearTransactionsAction, deleteTransactionAction } from "@/server/actions/admin";
+import { clearTransactionsAction, deleteTransactionAction } from "@/lib/actions/admin";
 
 /**
  * Deletes a single ledger row, behind a two-step confirm. When the row is a

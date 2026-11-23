@@ -1,12 +1,10 @@
 import React from 'react';
 
 import { DepositForm, DepositHistoryHint } from "@/components/fairmoney/deposit-form";
-import { requireUser } from "@/lib/auth";
-
-export const metadata = { title: "Add money — INSTANT PAYMENT" };
+import { requireProfile } from "@/lib/auth";
 
 export default async function DepositPage() {
-  const user = await requireUser();
+  const profile = await requireProfile();
 
   return (
     <div className="space-y-8">
@@ -16,12 +14,12 @@ export default async function DepositPage() {
           Deposit funds
         </h1>
         <p className="mt-3 text-[13.5px] leading-relaxed text-muted-foreground">
-          Enter your deposit code and the amount you expect it to add. We verify the code on our
-          servers and credit the amount it carries.
+          Enter your deposit code and the amount you expect it to add. The code is checked here and
+          the amount it carries is what gets credited.
         </p>
       </header>
 
-      <DepositForm balanceCents={user.balanceCents} />
+      <DepositForm balanceCents={profile.balanceCents} />
       <DepositHistoryHint />
     </div>
   );

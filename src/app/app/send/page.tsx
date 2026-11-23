@@ -1,19 +1,19 @@
 import React from 'react';
 
 import { SendFlow } from "@/components/fairmoney/send-flow";
-import { requireUser } from "@/lib/auth";
-import { getRecentContacts } from "@/lib/queries";
-
-export const metadata = { title: "Send money — INSTANT PAYMENT" };
+import { requireProfile } from "@/lib/auth";
+import { getRecentContacts } from "@/lib/data/queries";
 
 export default async function SendPage({
   searchParams,
 }: {
-  searchParams: Promise<{ to?: string }>;
+  searchParams: Promise<{ to?: string | string[] }>;
 }) {
-  const user = await requireUser();
-  const { to } = await searchParams;
-  const contacts = await getRecentContacts(user.id, 4);
+  const profile = await requireProfile();
+  const params = await searchParams;
+  const initialRecipient = Array.isArray(params.to) ? params.to[0] : params.to;
+
+  const contacts = await getRecentContacts(profile.id, 4);
 
   return (
     <div className="space-y-8">
@@ -30,12 +30,12 @@ export default async function SendPage({
 
       <SendFlow
         me={{
-          username: user.username,
-          displayName: user.displayName,
-          balanceCents: user.balanceCents,
+          username: profile.username,
+          displayName: profile.displayName,
+          balanceCents: profile.balanceCents,
         }}
         contacts={contacts}
-        initialRecipient={to}
+        initialRecipient={initialRecipient}
       />
     </div>
   );

@@ -5,10 +5,18 @@ import Link from "next/link";
 import { Avatar } from "@/components/fairmoney/avatar";
 import { BottomNav } from "@/components/fairmoney/bottom-nav";
 import { BrandMark } from "@/components/fairmoney/brand";
-import { requireUser } from "@/lib/auth";
+import { requireProfile } from "@/lib/auth";
 
+/**
+ * Wallet shell.
+ *
+ * The signed-in profile is resolved on the server from the Supabase session
+ * cookie, so there is no boot state to wait for: the shell renders with the real
+ * identity, and an unauthenticated visitor is redirected before any wallet
+ * markup is produced.
+ */
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
-  const user = await requireUser();
+  const profile = await requireProfile();
 
   return (
     <div className="fm-ambient min-h-dvh bg-fm-sand">
@@ -22,14 +30,14 @@ export default async function AppLayout({ children }: { children: React.ReactNod
             className="flex items-center gap-3 rounded-full border border-black/5 bg-white py-1.5 pl-1.5 pr-4 shadow-[0_10px_24px_-22px_rgba(7,24,20,0.6)] transition-colors hover:bg-white/85"
           >
             <Avatar
-              displayName={user.displayName}
-              hue={user.avatarHue}
-              username={user.username}
-              avatarUpdatedAt={user.avatar?.updatedAt ?? null}
+              displayName={profile.displayName}
+              hue={profile.avatarHue}
+              username={profile.username}
+              avatarUpdatedAt={profile.avatar?.updatedAt ?? null}
               size="sm"
             />
             <span className="fm-numeric font-mono text-[12px] text-muted-foreground">
-              @{user.username}
+              @{profile.username}
             </span>
           </Link>
         </header>
@@ -37,7 +45,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         <main className="flex-1">{children}</main>
       </div>
 
-      <BottomNav isAdmin={user.isAdmin} />
+      <BottomNav isAdmin={profile.isAdmin} />
     </div>
   );
 }

@@ -29,7 +29,9 @@ import {
 } from "@/components/ui/dialog";
 import { formatUSD, parseAmountToCents } from "@/lib/money";
 import { normaliseUsername } from "@/lib/validation";
-import { lookupRecipient, sendMoneyAction, type RecipientLookup } from "@/server/actions/wallet";
+import { lookupRecipient } from "@/lib/actions/auth";
+import { sendMoneyAction } from "@/lib/actions/wallet";
+import type { RecipientLookup } from "@/lib/data/types";
 
 type Receipt = {
   reference: string;

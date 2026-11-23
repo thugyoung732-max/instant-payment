@@ -1,30 +1,47 @@
-import { type NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 
-import { getAvatar } from "@/lib/profiles";
+import { createOptionalClient } from "@/lib/supabase/server";
 
 /**
- * Serves a stored profile picture. Bytes live in the database (small, already
- * downscaled in the browser) and the URL carries an updatedAt stamp, so the
- * response can be cached hard by the browser and the preview CDN alike.
+ * Serves a profile picture from the database.
+ *
+ * Pictures are stored as downscaled data URLs on the profile row (no bucket, no
+ * signed URL to leak). This route decodes one and returns real image bytes, so
+ * the app can cache it like any other image. It reads the public projection,
+ * which exposes the picture and nothing else about the account.
  */
 export async function GET(
-  _request: NextRequest,
+  _request: Request,
   { params }: { params: Promise<{ username: string }> },
 ) {
   const { username } = await params;
+  const handle = decodeURIComponent(username ?? "").toLowerCase();
 
-  const avatar = await getAvatar(decodeURIComponent(username).toLowerCase());
-  if (!avatar) {
-    return new NextResponse(null, { status: 404, headers: { "cache-control": "no-store" } });
-  }
+  if (!handle) return new NextResponse(null, { status: 404 });
 
-  const body = new Uint8Array(avatar.bytes);
+  const supabase = await createOptionalClient();
+  if (!supabase) return new NextResponse(null, { status: 404 });
 
-  return new NextResponse(body, {
+  const { data } = await supabase
+    .from("public_profiles")
+    .select("avatar_data_url")
+    .eq("username", handle)
+    .maybeSingle();
+
+  const dataUrl = typeof data?.avatar_data_url === "string" ? data.avatar_data_url : null;
+  if (!dataUrl) return new NextResponse(null, { status: 404 });
+
+  const match = /^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/.exec(dataUrl);
+  if (!match) return new NextResponse(null, { status: 404 });
+
+  const bytes = Buffer.from(match[2], "base64");
+
+  return new NextResponse(new Uint8Array(bytes), {
+    status: 200,
     headers: {
-      "content-type": avatar.mimeType,
-      "content-length": String(body.byteLength),
-      "cache-control": "public, max-age=31536000, immutable",
+      "Content-Type": match[1],
+      "Content-Length": String(bytes.byteLength),
+      "Cache-Control": "public, max-age=60, stale-while-revalidate=300",
     },
   });
 }

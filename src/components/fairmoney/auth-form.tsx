@@ -3,19 +3,48 @@ import React from 'react';
 
 import { ArrowRight, CircleAlert, Loader2 } from "lucide-react";
 import Link from "next/link";
-import { useActionState } from "react";
+import { useRouter } from "next/navigation";
+import { useState } from "react";
 
 import { Magnetic } from "@/components/fairmoney/magnetic";
-import { logInAction, signUpAction, type AuthState } from "@/server/actions/auth";
-
-const INITIAL: AuthState = { error: null };
+import { logInAction, signUpAction } from "@/lib/actions/auth";
 
 export function AuthForm({ mode }: { mode: "login" | "signup" }) {
-  const action = mode === "login" ? logInAction : signUpAction;
-  const [state, formAction, pending] = useActionState(action, INITIAL);
+  const router = useRouter();
+  const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
+
+  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    setPending(true);
+    setError(null);
+
+    const result =
+      mode === "login"
+        ? await logInAction({
+            identifier: data.get("identifier"),
+            password: data.get("password"),
+          })
+        : await signUpAction({
+            email: data.get("email"),
+            username: data.get("username"),
+            displayName: data.get("displayName"),
+            password: data.get("password"),
+          });
+
+    setPending(false);
+
+    if (!result.ok) {
+      setError(result.error ?? "Something went wrong. Try again.");
+      return;
+    }
+
+    router.replace(result.redirectTo ?? "/app");
+  }
 
   return (
-    <form action={formAction} className="space-y-6">
+    <form onSubmit={handleSubmit} className="space-y-6">
       {mode === "signup" ? (
         <>
           <div>
@@ -102,10 +131,10 @@ export function AuthForm({ mode }: { mode: "login" | "signup" }) {
         />
       </div>
 
-      {state.error ? (
+      {error ? (
         <p className="fm-notice border border-destructive/25 bg-destructive/8 text-destructive">
           <CircleAlert className="mt-0.5 h-4 w-4 shrink-0" />
-          {state.error}
+          {error}
         </p>
       ) : null}
 

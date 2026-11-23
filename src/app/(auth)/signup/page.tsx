@@ -3,13 +3,11 @@ import React from 'react';
 import { redirect } from "next/navigation";
 
 import { AuthForm } from "@/components/fairmoney/auth-form";
-import { getCurrentUser } from "@/lib/auth";
-
-export const metadata = { title: "Create your account — INSTANT PAYMENT" };
+import { getSessionProfile } from "@/lib/auth";
 
 export default async function SignUpPage() {
-  const user = await getCurrentUser();
-  if (user) redirect(user.isAdmin ? "/admin" : "/app");
+  const profile = await getSessionProfile();
+  if (profile) redirect(profile.isAdmin ? "/admin" : "/app");
 
   return (
     <div>

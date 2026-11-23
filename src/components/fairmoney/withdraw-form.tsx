@@ -10,7 +10,7 @@ import { AnimatedAmount } from "@/components/fairmoney/animated-amount";
 import { Magnetic } from "@/components/fairmoney/magnetic";
 import { DESTINATION_GROUPS, WITHDRAWAL_DESTINATIONS, findDestination } from "@/lib/destinations";
 import { formatUSD, parseAmountToCents } from "@/lib/money";
-import { withdrawAction } from "@/server/actions/wallet";
+import { withdrawAction } from "@/lib/actions/wallet";
 
 type Submitted = {
   reference: string;

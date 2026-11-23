@@ -8,7 +8,7 @@ import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { CHAT_PROVIDERS, chatProvider, chatScriptUrl, type ChatProviderId } from "@/lib/chat-config";
-import { saveChatSettingsAction, setChatEnabledAction } from "@/server/actions/chat";
+import { saveChatSettingsAction, setChatEnabledAction } from "@/lib/actions/chat";
 
 export type ChatPanelSettings = {
   enabled: boolean;

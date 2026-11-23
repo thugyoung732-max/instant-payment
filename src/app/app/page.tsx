@@ -6,19 +6,20 @@ import Link from "next/link";
 import { Avatar } from "@/components/fairmoney/avatar";
 import { BalanceCard } from "@/components/fairmoney/balance-card";
 import { TransactionList } from "@/components/fairmoney/transaction-list";
-import { requireUser } from "@/lib/auth";
+import { requireProfile } from "@/lib/auth";
+import { getActivity, getRecentContacts, getWalletSummary } from "@/lib/data/queries";
 import { formatUSD } from "@/lib/money";
-import { getActivity, getRecentContacts, getWalletSummary } from "@/lib/queries";
 
 export default async function HomePage() {
-  const user = await requireUser();
+  const profile = await requireProfile();
+
   const [summary, activity, contacts] = await Promise.all([
-    getWalletSummary(user.id, user.balanceCents),
-    getActivity(user.id, { limit: 4 }),
-    getRecentContacts(user.id, 4),
+    getWalletSummary(profile.id),
+    getActivity(profile.id, { limit: 4 }),
+    getRecentContacts(profile.id, 4),
   ]);
 
-  const firstName = user.displayName.split(" ")[0];
+  const firstName = profile.displayName.split(" ")[0];
 
   return (
     <div className="space-y-8">
@@ -31,7 +32,7 @@ export default async function HomePage() {
 
       <BalanceCard
         balanceCents={summary.balanceCents}
-        username={user.username}
+        username={profile.username}
         moneyInCents={summary.moneyInCents}
         moneyOutCents={summary.moneyOutCents}
         pendingWithdrawalCents={summary.pendingWithdrawalCents}

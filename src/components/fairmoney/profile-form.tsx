@@ -2,19 +2,19 @@
 import React from 'react';
 
 import { Camera, Check, CircleAlert, Loader2, Upload } from "lucide-react";
-import { useActionState, useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { toast } from "sonner";
 
 import { Avatar } from "@/components/fairmoney/avatar";
 import { Magnetic } from "@/components/fairmoney/magnetic";
-import { updateProfileAction, uploadAvatarAction } from "@/server/actions/profile";
+import { updateProfileAction, uploadAvatarAction } from "@/lib/actions/profile";
 
-const AVATAR_INITIAL = { error: null, success: null };
-const PROFILE_INITIAL = { error: null, success: null };
-
-/** Client-side downscale keeps uploads small; the server re-validates anyway. */
-async function downscaleImage(file: File, maxEdge = 512): Promise<File> {
-  if (file.type === "image/gif") return file;
+/**
+ * Downscales in the browser and returns a compact data URL. The picture is
+ * stored on the profile row in Supabase, so keeping it small matters: 512px
+ * JPEG is a few tens of kilobytes instead of a multi-megabyte upload.
+ */
+async function downscaleImage(file: File, maxEdge = 512): Promise<{ dataUrl: string; mimeType: string }> {
   try {
     const bitmap = await createImageBitmap(file);
     const scale = Math.min(1, maxEdge / Math.max(bitmap.width, bitmap.height));
@@ -25,17 +25,20 @@ async function downscaleImage(file: File, maxEdge = 512): Promise<File> {
     canvas.width = width;
     canvas.height = height;
     const context = canvas.getContext("2d");
-    if (!context) return file;
+    if (!context) throw new Error("Canvas unavailable");
     context.drawImage(bitmap, 0, 0, width, height);
     bitmap.close?.();
 
-    const blob = await new Promise<Blob | null>((resolve) =>
-      canvas.toBlob(resolve, "image/jpeg", 0.86),
-    );
-    if (!blob) return file;
-    return new File([blob], "avatar.jpg", { type: "image/jpeg" });
+    return { dataUrl: canvas.toDataURL("image/jpeg", 0.82), mimeType: "image/jpeg" };
   } catch {
-    return file;
+    // Fall back to the original file when the browser cannot decode it here.
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(new Error("Could not read that file"));
+      reader.readAsDataURL(file);
+    });
+    return { dataUrl, mimeType: file.type || "image/jpeg" };
   }
 }
 
@@ -50,46 +53,65 @@ export function ProfileForm({
   avatarHue: number;
   avatarUpdatedAt: Date | string | null;
 }) {
-  const formRef = useRef<HTMLFormElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [preparing, setPreparing] = useState(false);
+  const [avatarError, setAvatarError] = useState<string | null>(null);
 
-  const [avatarState, avatarAction, avatarPending] = useActionState(
-    uploadAvatarAction,
-    AVATAR_INITIAL,
-  );
-  const [profileState, profileAction, profilePending] = useActionState(
-    updateProfileAction,
-    PROFILE_INITIAL,
-  );
-
-  useEffect(() => {
-    if (avatarState.error) toast.error(avatarState.error);
-    if (avatarState.success) {
-      toast.success(avatarState.success);
-      setPreview(null);
-    }
-  }, [avatarState]);
-
-  useEffect(() => {
-    if (profileState.error) toast.error(profileState.error);
-    if (profileState.success) toast.success(profileState.success);
-  }, [profileState]);
+  const [profileError, setProfileError] = useState<string | null>(null);
+  const [profileSuccess, setProfileSuccess] = useState<string | null>(null);
+  const [profilePending, setProfilePending] = useState(false);
 
   async function handleFile(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
-    setPreparing(true);
-    const prepared = await downscaleImage(file);
-    setPreview(URL.createObjectURL(prepared));
 
-    // Hand the prepared file to the form's real input, then submit it.
-    const transfer = new DataTransfer();
-    transfer.items.add(prepared);
-    if (inputRef.current) inputRef.current.files = transfer.files;
-    formRef.current?.requestSubmit();
-    setPreparing(false);
+    setPreparing(true);
+    setAvatarError(null);
+
+    try {
+      const prepared = await downscaleImage(file);
+      setPreview(prepared.dataUrl);
+      const result = await uploadAvatarAction(prepared);
+
+      if (result.error) {
+        setAvatarError(result.error);
+        toast.error(result.error);
+      } else if (result.success) {
+        toast.success(result.success);
+      }
+    } catch {
+      setAvatarError("That image could not be read.");
+      toast.error("That image could not be read.");
+    } finally {
+      setPreparing(false);
+      // Clear first so choosing the same file twice fires again.
+      event.target.value = "";
+    }
+  }
+
+  async function saveProfile(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+
+    setProfilePending(true);
+    setProfileError(null);
+    setProfileSuccess(null);
+
+    const result = await updateProfileAction({
+      username: String(data.get("username") ?? ""),
+      displayName: String(data.get("displayName") ?? ""),
+    });
+
+    setProfilePending(false);
+
+    if (result.error) {
+      setProfileError(result.error);
+      toast.error(result.error);
+      return;
+    }
+
+    setProfileSuccess(result.success);
+    if (result.success) toast.success(result.success);
   }
 
   return (
@@ -103,7 +125,7 @@ export function ProfileForm({
         <div className="mt-6 flex flex-wrap items-center gap-6">
           <span className="relative shrink-0">
             {preview ? (
-              // Instant local preview while the upload is in flight.
+              // Instant local preview while the picture is being saved.
               // eslint-disable-next-line @next/next/no-img-element
               <img
                 src={preview}
@@ -120,7 +142,7 @@ export function ProfileForm({
                 className="h-24 w-24 text-xl"
               />
             )}
-            {avatarPending || preparing ? (
+            {preparing ? (
               <span className="absolute inset-0 grid place-items-center rounded-full bg-black/45 text-white">
                 <Loader2 className="h-6 w-6 animate-spin" />
               </span>
@@ -128,34 +150,28 @@ export function ProfileForm({
           </span>
 
           <div className="min-w-[180px] flex-1">
-            <form ref={formRef} action={avatarAction}>
-              <input
-                ref={inputRef}
-                type="file"
-                name="avatar"
-                accept="image/png,image/jpeg,image/webp,image/gif"
-                onChange={handleFile}
-                className="hidden"
-                id="avatar-file"
-              />
-              <label htmlFor="avatar-file" className="fm-btn fm-btn-ghost cursor-pointer">
-                <Camera className="h-4 w-4" />
-                {avatarUpdatedAt ? "Change photo" : "Upload photo"}
-              </label>
-              <button type="submit" disabled={avatarPending} className="hidden">
-                Save photo
-              </button>
-            </form>
+            <input
+              type="file"
+              name="avatar"
+              accept="image/png,image/jpeg,image/webp,image/gif"
+              onChange={handleFile}
+              className="hidden"
+              id="avatar-file"
+            />
+            <label htmlFor="avatar-file" className="fm-btn fm-btn-ghost cursor-pointer">
+              <Camera className="h-4 w-4" />
+              {avatarUpdatedAt ? "Change photo" : "Upload photo"}
+            </label>
             <p className="mt-3 text-[12.5px] leading-relaxed text-muted-foreground">
-              JPG, PNG, WEBP or GIF · resized to 512px before upload.
+              JPG, PNG, WEBP or GIF · resized to 512px and kept in this browser.
             </p>
           </div>
         </div>
 
-        {avatarState.error ? (
+        {avatarError ? (
           <p className="fm-notice mt-5 border border-destructive/25 bg-destructive/8 text-destructive">
             <CircleAlert className="mt-0.5 h-4 w-4 shrink-0" />
-            {avatarState.error}
+            {avatarError}
           </p>
         ) : null}
       </section>
@@ -163,7 +179,7 @@ export function ProfileForm({
       <section className="fm-card px-6 py-6">
         <h2 className="font-display text-[16px] font-semibold text-foreground">Profile details</h2>
 
-        <form action={profileAction} className="mt-6 space-y-6">
+        <form onSubmit={saveProfile} className="mt-6 space-y-6">
           <div>
             <label htmlFor="username" className="fm-label block">
               Username
@@ -199,17 +215,17 @@ export function ProfileForm({
             />
           </div>
 
-          {profileState.error ? (
+          {profileError ? (
             <p className="fm-notice border border-destructive/25 bg-destructive/8 text-destructive">
               <CircleAlert className="mt-0.5 h-4 w-4 shrink-0" />
-              {profileState.error}
+              {profileError}
             </p>
           ) : null}
 
-          {profileState.success ? (
+          {profileSuccess ? (
             <p className="fm-notice border border-emerald-600/25 bg-emerald-50 text-emerald-800">
               <Check className="mt-0.5 h-4 w-4 shrink-0" />
-              {profileState.success}
+              {profileSuccess}
             </p>
           ) : null}
 

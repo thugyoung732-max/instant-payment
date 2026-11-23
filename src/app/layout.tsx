@@ -3,10 +3,9 @@ import React from 'react';
 import type { Metadata, Viewport } from "next";
 import { Inter, JetBrains_Mono, Space_Grotesk } from "next/font/google";
 
-import { ChatWidget } from "@/components/fairmoney/chat-widget";
+import { ChatWidgetMount } from "@/components/chat-widget-mount";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Toaster } from "@/components/ui/sonner";
-import { chatConfigFrom, getChatSettingsSafe } from "@/lib/chat";
 
 import "./globals.css";
 
@@ -119,17 +118,11 @@ export const viewport: Viewport = {
   ],
 };
 
-export default async function RootLayout({
+export default function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  // The live-chat integration is configured in the console; the widget loads the
-  // provider's own script on customer pages (never in the console).
-  const chatSettings = await getChatSettingsSafe();
-  const chatConfig = chatConfigFrom(chatSettings);
-  const chatAccent = chatSettings.accentColor || "#0f8a5f";
-
   return (
     <html
       lang="en"
@@ -144,7 +137,7 @@ export default async function RootLayout({
           disableTransitionOnChange
         >
           {children}
-          <ChatWidget config={chatConfig} accentColor={chatAccent} />
+          <ChatWidgetMount />
           <Toaster position="top-center" richColors closeButton />
         </ThemeProvider>
       </body>

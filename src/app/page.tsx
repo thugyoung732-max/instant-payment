@@ -21,10 +21,10 @@ import { Avatar } from "@/components/fairmoney/avatar";
 import { BrandMark } from "@/components/fairmoney/brand";
 import { Magnetic } from "@/components/fairmoney/magnetic";
 import { Reveal, RevealGroup, RevealItem } from "@/components/fairmoney/reveal";
-import { getCurrentUser } from "@/lib/auth";
+import { getSessionProfile } from "@/lib/auth";
 
 export default async function LandingPage() {
-  const user = await getCurrentUser();
+  const user = await getSessionProfile();
   const walletHref = user ? (user.isAdmin ? "/admin" : "/app") : "/signup";
 
   return (
