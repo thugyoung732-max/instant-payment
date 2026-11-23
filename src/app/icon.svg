@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="INSTANT PAYMENT">
+  <!-- INSTANT PAYMENT app mark: three rising bars in the wallet's green → lime
+       ramp, so the browser tab and the link preview carry the same identity as
+       the mark inside the app. Drawn as flat geometry (no text) so it stays
+       legible at 16px. -->
+  <defs>
+    <linearGradient id="plate" x1="8" y1="2" x2="58" y2="62" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#12332b" />
+      <stop offset="1" stop-color="#071814" />
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="15" fill="url(#plate)" />
+  <rect x="13" y="35" width="9" height="16" rx="4.5" fill="#0f8a5f" />
+  <rect x="27.5" y="26" width="9" height="25" rx="4.5" fill="#16c78b" />
+  <rect x="42" y="17" width="9" height="34" rx="4.5" fill="#c8f24a" />
+</svg>

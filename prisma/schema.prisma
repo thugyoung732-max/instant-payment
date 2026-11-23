@@ -1,0 +1,196 @@
+// INSTANT PAYMENT — wallet backend.
+//
+// Storage conventions: money is always integer cents; balances are only ever
+// written by server-side ledger operations (never from a client payload).
+// Withdrawal requests are recorded and reviewed in the operations console.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum TransactionType {
+  TRANSFER
+  DEPOSIT
+  WITHDRAWAL
+  // Kept for historical rows created before the opening-balance changes.
+  WELCOME_BONUS
+  // Console-initiated balance adjustments.
+  ADMIN_CREDIT
+  ADMIN_RESET
+}
+
+enum TransactionStatus {
+  COMPLETED
+  PENDING
+  FAILED
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  // Stored without the leading "@", always lower-cased: the unique handle.
+  username     String   @unique
+  displayName  String
+  passwordHash String
+  avatarHue    Int      @default(156)
+  isAdmin      Boolean  @default(false)
+  balanceCents Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Exactly one stored picture per profile; served through /api/avatar/[username].
+  avatar Avatar?
+
+  sent      Transaction[] @relation("sender")
+  received  Transaction[] @relation("recipient")
+  codes     DepositCode[] @relation("codeAuthor")
+  resolved  Transaction[] @relation("resolver")
+  feeRules  FeeRule[]     @relation("feeAuthor")
+  // LEGACY: no withdrawal fee exists any more; these relations are kept only so
+  // historical rows survive a schema push.
+  feeOverride UserFeeOverride?  @relation("feeOverrideSubject")
+  feeOverridesSet UserFeeOverride[] @relation("feeOverrideAuthor")
+
+  @@index([balanceCents])
+}
+
+model Avatar {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  mimeType  String
+  bytes     Bytes
+  updatedAt DateTime @updatedAt
+}
+
+/// Internally issued deposit codes. A valid code credits its own configured
+/// amount — the amount typed in the browser is never trusted.
+model DepositCode {
+  id          String    @id @default(cuid())
+  code        String    @unique
+  creditCents Int
+  label       String?
+  active      Boolean   @default(true)
+  // Single-use codes are locked to one redemption; multi-use codes carry a cap.
+  singleUse   Boolean   @default(true)
+  maxUses     Int?      @default(1)
+  uses        Int       @default(0)
+  lastUsedAt  DateTime?
+  createdById String?
+  createdBy   User?     @relation("codeAuthor", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime  @default(now())
+
+  transactions Transaction[]
+
+  @@index([active])
+}
+
+/// LEGACY: unused. Withdrawal fees were removed, so no fee band is read or
+/// written. Kept so historical rows are never destroyed by a schema push.
+model FeeRule {
+  id          String   @id @default(cuid())
+  label       String
+  minCents    Int
+  maxCents    Int?
+  feeCents    Int
+  active      Boolean  @default(true)
+  isDefault   Boolean  @default(false)
+  createdById String?
+  createdBy   User?    @relation("feeAuthor", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([active])
+}
+
+/// LEGACY: unused. This held the one global withdrawal fee before fees were
+/// removed from the wallet. Kept so historical rows survive a schema push.
+model WithdrawalFeeSetting {
+  id          String   @id @default(cuid())
+  feeCents    Int
+  updatedById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+/// LEGACY: unused. This held a per-user withdrawal fee before fees were removed
+/// from the wallet. Kept so historical rows survive a schema push.
+model UserFeeOverride {
+  id          String   @id @default(cuid())
+  userId      String   @unique
+  feeCents    Int
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user      User  @relation("feeOverrideSubject", fields: [userId], references: [id], onDelete: Cascade)
+  createdBy User? @relation("feeOverrideAuthor", fields: [createdById], references: [id], onDelete: SetNull)
+}
+
+/// Single-row configuration for the customer support chat. The provider keys
+/// stored here are the public, client-side widget keys the vendor expects to see
+/// in the page — never an API secret.
+model ChatSettings {
+  id              String   @id @default(cuid())
+  enabled         Boolean  @default(false)
+  // smartsupp | crisp | tawk | intercom | livechat | custom
+  provider        String   @default("smartsupp")
+  primaryKey      String?
+  secondaryKey    String?
+  customScriptUrl String?
+  accentColor     String   @default("#0f8a5f")
+  position        String   @default("right")
+  welcomeMessage  String?
+  fallbackEmail   String?
+  fallbackPhone   String?
+  fallbackWhatsapp String?
+  updatedAt       DateTime @updatedAt
+  updatedById     String?
+
+  @@index([enabled])
+}
+
+model Transaction {
+  id            String            @id @default(cuid())
+  reference     String            @unique
+  type          TransactionType   @default(TRANSFER)
+  status        TransactionStatus @default(COMPLETED)
+  amountCents   Int
+  // LEGACY: fee snapshotted on withdrawals created before fees were removed.
+  // Every new row stores 0 — the hold and the debit are the amount alone.
+  feeCents      Int               @default(0)
+  note          String?
+  failureReason String?
+
+  senderId    String?
+  recipientId String?
+  // Destination captured for withdrawal requests.
+  destination String?
+  // Set when a deposit was funded by an issued code.
+  depositCodeId String?
+
+  // Balances captured inside the same database transaction that moved the money.
+  senderBalanceAfterCents    Int?
+  recipientBalanceAfterCents Int?
+
+  // Withdrawal review trail.
+  resolvedAt DateTime?
+  resolvedBy String?
+
+  createdAt DateTime @default(now())
+
+  sender      User?        @relation("sender", fields: [senderId], references: [id], onDelete: SetNull)
+  recipient   User?        @relation("recipient", fields: [recipientId], references: [id], onDelete: SetNull)
+  depositCode DepositCode? @relation(fields: [depositCodeId], references: [id], onDelete: SetNull)
+  resolver    User?        @relation("resolver", fields: [resolvedBy], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([senderId, createdAt])
+  @@index([recipientId, createdAt])
+  @@index([type, status])
+}
