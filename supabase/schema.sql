@@ -263,7 +263,6 @@ with (security_invoker = false) as
     enabled,
     provider,
     public_key,
-    secondary_key,
     custom_script_url,
     accent_color,
     position,
