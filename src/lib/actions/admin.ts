@@ -42,14 +42,31 @@ function refreshConsole() {
   revalidatePath("/app", "layout");
 }
 
-async function requireAdminClient() {
-  if (!supabaseConfigured()) return { blocked: NOT_CONFIGURED as AdminActionResult } as const;
+/** An authenticated server client, as built by `@/lib/supabase/server`. */
+type ServerSupabaseClient = Awaited<ReturnType<typeof createClient>>;
+
+/**
+ * Result of the console gate.
+ *
+ * The union is written out instead of inferred from the `return` statements on
+ * purpose. An inferred union of object literals gains a phantom
+ * `blocked?: undefined` on the success branch, so `"blocked" in gate` narrows to
+ * `{ blocked: AdminActionResult; blocked?: undefined }` and `gate.blocked`
+ * becomes `AdminActionResult | undefined` — which then fails every
+ * `Promise<AdminActionResult>` signature. Declaring the two branches as
+ * distinct types makes the `in` check exhaustive: after it, `gate.blocked` is
+ * exactly `AdminActionResult` and `gate.supabase` is exactly the client.
+ */
+type AdminGate = { blocked: AdminActionResult } | { supabase: ServerSupabaseClient };
+
+async function requireAdminClient(): Promise<AdminGate> {
+  if (!supabaseConfigured()) return { blocked: NOT_CONFIGURED };
 
   const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
-  if (!user) return { blocked: EXPIRED } as const;
+  if (!user) return { blocked: EXPIRED };
 
   const { data: profile } = await supabase
     .from("profiles")
@@ -57,9 +74,9 @@ async function requireAdminClient() {
     .eq("id", user.id)
     .maybeSingle();
 
-  if (!profile?.is_admin) return { blocked: DENIED } as const;
+  if (!profile?.is_admin) return { blocked: DENIED };
 
-  return { supabase } as const;
+  return { supabase };
 }
 
 /** Turns a raised database error into a console-friendly sentence. */
