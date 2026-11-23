@@ -42,10 +42,8 @@ model User {
   balanceCents Int      @default(0)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
-
   // Exactly one stored picture per profile; served through /api/avatar/[username].
   avatar Avatar?
-
   sent      Transaction[] @relation("sender")
   received  Transaction[] @relation("recipient")
   codes     DepositCode[] @relation("codeAuthor")
@@ -55,7 +53,6 @@ model User {
   // historical rows survive a schema push.
   feeOverride UserFeeOverride?  @relation("feeOverrideSubject")
   feeOverridesSet UserFeeOverride[] @relation("feeOverrideAuthor")
-
   @@index([balanceCents])
 }
 
@@ -84,7 +81,6 @@ model DepositCode {
   createdById String?
   createdBy   User?     @relation("codeAuthor", fields: [createdById], references: [id], onDelete: SetNull)
   createdAt   DateTime  @default(now())
-
   transactions Transaction[]
 
   @@index([active])
@@ -104,7 +100,6 @@ model FeeRule {
   createdBy   User?    @relation("feeAuthor", fields: [createdById], references: [id], onDelete: SetNull)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
-
   @@index([active])
 }
 
@@ -127,7 +122,6 @@ model UserFeeOverride {
   createdById String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
-
   user      User  @relation("feeOverrideSubject", fields: [userId], references: [id], onDelete: Cascade)
   createdBy User? @relation("feeOverrideAuthor", fields: [createdById], references: [id], onDelete: SetNull)
 }
@@ -151,7 +145,6 @@ model ChatSettings {
   fallbackWhatsapp String?
   updatedAt       DateTime @updatedAt
   updatedById     String?
-
   @@index([enabled])
 }
 
@@ -166,7 +159,6 @@ model Transaction {
   feeCents      Int               @default(0)
   note          String?
   failureReason String?
-
   senderId    String?
   recipientId String?
   // Destination captured for withdrawal requests.
@@ -183,12 +175,10 @@ model Transaction {
   resolvedBy String?
 
   createdAt DateTime @default(now())
-
   sender      User?        @relation("sender", fields: [senderId], references: [id], onDelete: SetNull)
   recipient   User?        @relation("recipient", fields: [recipientId], references: [id], onDelete: SetNull)
   depositCode DepositCode? @relation(fields: [depositCodeId], references: [id], onDelete: SetNull)
   resolver    User?        @relation("resolver", fields: [resolvedBy], references: [id], onDelete: SetNull)
-
   @@index([createdAt])
   @@index([senderId, createdAt])
   @@index([recipientId, createdAt])
