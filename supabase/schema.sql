@@ -305,7 +305,8 @@ with (security_invoker = false) as
     t.resolved_by,
     t.created_at
   from public.transactions t
-  where t.type = 'WITHDRAWAL';
+  where t.type = 'WITHDRAWAL'
+    and (t.sender_id = auth.uid() or public.is_admin());
 
 -- ---------------------------------------------------------------------------
 -- Row Level Security
