@@ -15,16 +15,6 @@ import {
   firstIssue,
 } from "@/lib/validation";
 
-/**
- * Operations-console actions.
- *
- * Each one calls an `admin_*` Postgres function. The authorisation check lives in
- * the database (`public.assert_admin()` raises unless `profiles.is_admin` is true
- * for `auth.uid()`), so a customer who learns an action's name and payload still
- * cannot execute it — the guard here only produces a friendlier error and avoids
- * pointless round trips.
- */
-
 const NOT_CONFIGURED: AdminActionResult = {
   ok: false,
   message:
@@ -42,21 +32,7 @@ function refreshConsole() {
   revalidatePath("/app", "layout");
 }
 
-/** An authenticated server client, as built by `@/lib/supabase/server`. */
 type ServerSupabaseClient = Awaited<ReturnType<typeof createClient>>;
-
-/**
- * Result of the console gate.
- *
- * The union is written out instead of inferred from the `return` statements on
- * purpose. An inferred union of object literals gains a phantom
- * `blocked?: undefined` on the success branch, so `"blocked" in gate` narrows to
- * `{ blocked: AdminActionResult; blocked?: undefined }` and `gate.blocked`
- * becomes `AdminActionResult | undefined` — which then fails every
- * `Promise<AdminActionResult>` signature. Declaring the two branches as
- * distinct types makes the `in` check exhaustive: after it, `gate.blocked` is
- * exactly `AdminActionResult` and `gate.supabase` is exactly the client.
- */
 type AdminGate = { blocked: AdminActionResult } | { supabase: ServerSupabaseClient };
 
 async function requireAdminClient(): Promise<AdminGate> {
@@ -79,17 +55,12 @@ async function requireAdminClient(): Promise<AdminGate> {
   return { supabase };
 }
 
-/** Turns a raised database error into a console-friendly sentence. */
 function failure(error: { message?: string } | null, fallback: string): AdminActionResult {
   const message = (error?.message ?? "").trim();
   if (message.includes("ADMIN_ONLY")) return DENIED;
   if (message.includes("UNAUTHENTICATED")) return EXPIRED;
   return { ok: false, message: fallback };
 }
-
-// ---------------------------------------------------------------------------
-// Balances
-// ---------------------------------------------------------------------------
 
 export async function adminCreditAction(input: {
   userId: string;
@@ -140,10 +111,6 @@ export async function adminResetBalanceAction(userId: string): Promise<AdminActi
     )}.`,
   };
 }
-
-// ---------------------------------------------------------------------------
-// Deposit codes
-// ---------------------------------------------------------------------------
 
 export async function createDepositCodeAction(input: {
   code: string;
@@ -252,10 +219,6 @@ export async function seedDepositCodesAction(): Promise<AdminActionResult> {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Withdrawals and ledger maintenance
-// ---------------------------------------------------------------------------
-
 export async function resolveWithdrawalAction(input: {
   transactionId: string;
   outcome: "COMPLETED" | "FAILED";
@@ -357,17 +320,6 @@ export async function clearTransactionsAction(input: {
   return { ok: true, message: `${parts.join(" · ")}.` };
 }
 
-// ---------------------------------------------------------------------------
-// Demo roster
-// ---------------------------------------------------------------------------
-
-/**
- * Creates the sandbox roster.
- *
- * Auth users can only be created with the service-role key, which must stay on
- * the server. When the key is absent this returns the honest answer instead of
- * pretending: run `supabase/seed.sql` once, or register the accounts normally.
- */
 export async function seedDemoAccountsAction(): Promise<AdminActionResult> {
   const gate = await requireAdminClient();
   if ("blocked" in gate) return gate.blocked;
@@ -393,8 +345,6 @@ export async function seedDemoAccountsAction(): Promise<AdminActionResult> {
     };
   }
 
-  // Server-only client: it never leaves this action and is never sent to the
-  // browser. It exists purely to create confirmed auth users.
   const admin = createSupabaseClient(url, serviceKey, {
     auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
   });
@@ -430,5 +380,3 @@ export async function seedDemoAccountsAction(): Promise<AdminActionResult> {
       }
     : { ok: false, message: "No demo profiles were created. Check the Supabase auth settings." };
 }
-
-
