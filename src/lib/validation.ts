@@ -183,6 +183,52 @@ export const clearTransactionsSchema = z.object({
   scope: z.enum(CLEAR_TRANSACTION_SCOPES),
 });
 
+/**
+ * Where a new flat withdrawal fee applies.
+ *
+ * The values are the exact uppercase strings `admin_update_withdrawal_fee`
+ * accepts, so what the form shows, what the action validates and what Postgres
+ * receives are the same three words.
+ */
+export const FEE_APPLY_SCOPES = ["FUTURE", "PENDING", "BOTH"] as const;
+
+export type FeeApplyScope = (typeof FEE_APPLY_SCOPES)[number];
+
+/**
+ * A flat withdrawal fee.
+ *
+ * Deliberately not the shared movement schema: this is a fee, so $0.00 is legal,
+ * it is capped far below a transfer, and it is never a percentage — the admin
+ * types an amount, and it is converted to cents by the caller before this runs.
+ */
+export const withdrawalFeeAmountSchema = z
+  .number()
+  .int()
+  .min(0, "A fee cannot be negative.")
+  .max(MAX_AMOUNT_CENTS, "Fees cap at $1,000,000.00.");
+
+export const withdrawalFeeSchema = z
+  .object({
+    feeCents: withdrawalFeeAmountSchema,
+    feeReason: z
+      .string()
+      .trim()
+      .max(120, "Keep the fee reason under 120 characters.")
+      .default(""),
+    applyTo: z.enum(FEE_APPLY_SCOPES),
+  })
+  .superRefine((value, context) => {
+    // A customer has to be told why they are being charged, so a non-zero fee
+    // always carries a reason. A $0.00 fee may be saved with none.
+    if (value.feeCents > 0 && value.feeReason.trim().length < 3) {
+      context.addIssue({
+        code: "custom",
+        path: ["feeReason"],
+        message: "Add a short reason customers will see for this fee.",
+      });
+    }
+  });
+
 export function firstIssue(error: z.ZodError): string {
   return error.issues[0]?.message ?? "That input doesn't look right.";
 }

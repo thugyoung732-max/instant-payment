@@ -75,7 +75,7 @@ async function brandFonts(): Promise<BrandFont[] | undefined> {
   return cachedFonts ?? undefined;
 }
 
-const PROOF_POINTS = ["Send to any @handle", "Deposit codes", "Payouts with no fee"];
+const PROOF_POINTS = ["Send to any @handle", "Deposit codes", "Flat payout fee, never deducted"];
 
 /**
  * The card shown when an INSTANT PAYMENT link is shared, served from its own

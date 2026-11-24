@@ -1,6 +1,13 @@
 import "server-only";
 
-import { mapChatSettings, mapDepositCode, mapProfile, mapPublicProfile, mapTransaction } from "./mappers";
+import {
+  mapChatSettings,
+  mapDepositCode,
+  mapProfile,
+  mapPublicProfile,
+  mapTransaction,
+  mapWithdrawalFeeSettings,
+} from "./mappers";
 import type {
   ChatSettingsRecord,
   DepositCodeRecord,
@@ -9,6 +16,7 @@ import type {
   TransactionRecord,
   TransactionStatus,
   TransactionType,
+  WithdrawalFeeSettings,
 } from "./types";
 import { createClient } from "@/lib/supabase/server";
 
@@ -36,6 +44,8 @@ export type ActivityItem = {
   counterparty: PublicProfile | null;
   amountCents: number;
   feeCents: number;
+  /** Reason the admin gave for the flat withdrawal fee, stored with the request. */
+  feeReason: string | null;
   note: string | null;
   destination: string | null;
   depositCode: string | null;
@@ -109,6 +119,7 @@ export async function getActivity(
       counterparty: other && other.id !== userId ? other : null,
       amountCents: row.amountCents,
       feeCents: row.feeCents,
+      feeReason: row.feeReason,
       note: row.note,
       destination: row.destination,
       depositCode: row.depositCodeId ? (codes.get(row.depositCodeId)?.code ?? null) : null,
@@ -417,7 +428,7 @@ export async function getDepositCodes(limit = 40): Promise<DepositCodeListRow[]>
 export async function getTransactionCounts() {
   const supabase = await createClient();
 
-  const { data } = await supabase.from("transactions").select("type, status, amount_cents, fee_cents");
+  const { data } = await supabase.from("transactions").select("type, status, amount_cents");
   const rows = data ?? [];
 
   const pending = rows.filter((row) => row.type === "WITHDRAWAL" && row.status === "PENDING");
@@ -426,11 +437,78 @@ export async function getTransactionCounts() {
     total: rows.length,
     settled: rows.filter((row) => row.status === "COMPLETED" || row.status === "FAILED").length,
     pendingCount: pending.length,
-    pendingHeldCents: pending.reduce(
-      (sum, row) => sum + Number(row.amount_cents) + Number(row.fee_cents),
-      0,
-    ),
+    // Only the requested amount is held: the withdrawal fee is informational and
+    // never leaves a wallet, so it must not inflate the held total.
+    pendingHeldCents: pending.reduce((sum, row) => sum + Number(row.amount_cents), 0),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Withdrawal fee
+// ---------------------------------------------------------------------------
+
+/**
+ * The active flat withdrawal fee, for the operations console.
+ *
+ * `admin_get_withdrawal_fee()` is the authoritative read (it is the function the
+ * database exposes for exactly this), and the base table is used as a fallback
+ * because some deploys restrict the RPC to the console session. `null` means
+ * neither path returned a fee — the panel then shows a configuration notice
+ * instead of inventing a $0.00 fee that would be wrong.
+ */
+export async function getWithdrawalFeeSettings(): Promise<WithdrawalFeeSettings | null> {
+  const supabase = await createClient();
+
+  const { data, error } = await supabase.rpc("admin_get_withdrawal_fee");
+  if (!error) {
+    const settings = mapWithdrawalFeeSettings(data);
+    if (settings) return settings;
+  }
+
+  const { data: row, error: tableError } = await supabase
+    .from("withdrawal_fee_settings")
+    .select("*")
+    .limit(1)
+    .maybeSingle();
+
+  if (tableError) return null;
+  return mapWithdrawalFeeSettings(row);
+}
+
+/**
+ * The active fee, as a customer may see it.
+ *
+ * The pre-submit disclosure on the withdrawal page reads the settings row with
+ * the customer's own session, so Row Level Security decides whether it is
+ * visible. Nothing here is trusted for money movement: `request_withdrawal`
+ * looks the fee up itself and records it on the row. When the read is blocked
+ * the page falls back to "shown on your confirmation" rather than displaying a
+ * fee the customer might not actually be charged.
+ */
+export async function getPublicWithdrawalFee(): Promise<WithdrawalFeeSettings | null> {
+  const supabase = await createClient();
+
+  const { data, error } = await supabase
+    .from("withdrawal_fee_settings")
+    .select("*")
+    .limit(1)
+    .maybeSingle();
+
+  if (!error) {
+    const settings = mapWithdrawalFeeSettings(data);
+    if (settings) return settings;
+  }
+
+  // Browser-safe projection, when the deployment exposes one (the same pattern
+  // `public_chat_settings` uses). Absent is fine — we simply show nothing.
+  const { data: viewRow, error: viewError } = await supabase
+    .from("public_withdrawal_fee_settings")
+    .select("*")
+    .limit(1)
+    .maybeSingle();
+
+  if (viewError) return null;
+  return mapWithdrawalFeeSettings(viewRow);
 }
 
 // ---------------------------------------------------------------------------

@@ -22,6 +22,7 @@ It creates:
 | `transactions` | the ledger: transfers, deposits, withdrawals, admin adjustments |
 | `deposit_codes` | issued codes, their amount and redemption capacity |
 | `chat_settings` | the single live-chat configuration row |
+| `withdrawal_fee_settings` | the single flat withdrawal fee row |
 | `public_profiles` (view) | safe projection of a profile: no email, no balance |
 | `my_deposit_codes` (view) | the codes a customer's own receipts reference |
 | `withdrawal_requests` (view) | request-shaped projection of `WITHDRAWAL` rows |
@@ -31,6 +32,36 @@ Withdrawal requests are deliberately **not** a second table. A request is a
 `transactions` row of type `WITHDRAWAL` with status `PENDING`; duplicating it
 would give the balance two sources of truth. `withdrawal_requests` exposes the
 same rows in a request shape for the console.
+
+### Withdrawal fee
+
+The flat withdrawal fee is configured and enforced entirely in Postgres.
+[`schema.sql`](./schema.sql) creates these objects for a fresh database, and
+[`migrations/20261124090000_withdrawal_fee.sql`](./migrations/20261124090000_withdrawal_fee.sql)
+applies the same changes to an existing one (safe to re-run):
+
+| Object | Purpose |
+| --- | --- |
+| `withdrawal_fee_settings` | the single active flat fee row (`id = 'default'`) |
+| `transactions.fee_cents`, `transactions.fee_reason` | the fee recorded with each request |
+| `admin_get_withdrawal_fee()` | console read of the active fee |
+| `admin_update_withdrawal_fee(p_fee_cents, p_fee_reason, p_apply_to)` | saves a fee for `FUTURE`, `PENDING` or `BOTH` |
+| `request_withdrawal(p_amount_cents, p_destination)` | holds the requested amount, records the stored fee |
+| `admin_resolve_withdrawal(p_transaction_id, p_outcome, p_reason)` | approves, or rejects and refunds the requested amount |
+| `public_withdrawal_fee_settings` (view) | browser-safe read of the fee for customers |
+
+The fee is informational: `request_withdrawal` debits exactly
+`p_amount_cents`, and `admin_resolve_withdrawal` refunds exactly
+`transactions.amount_cents` on a rejection. The fee is never added to a hold and
+never refunded, and `p_apply_to = 'PENDING' | 'BOTH'` only rewrites rows that are
+still `PENDING`, so completed and declined withdrawals can never be altered by a
+fee change.
+
+Signed-in customers read the fee directly (there is a `select` policy for
+`authenticated` and a `public_withdrawal_fee_settings` view), so the withdrawal
+screen can disclose it before a request is submitted. There is no write policy
+on the table: only `admin_update_withdrawal_fee()` writes it, and that function
+requires `profiles.is_admin`.
 
 ## 2. Create the demo roster (optional)
 

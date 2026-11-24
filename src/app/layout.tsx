@@ -30,7 +30,7 @@ const jetbrainsMono = JetBrains_Mono({
 
 const TAGLINE = "INSTANT PAYMENT — send, deposit and withdraw in one ledger";
 const DESCRIPTION =
-  "INSTANT PAYMENT is a digital wallet: send money to any @handle, add funds with a deposit code, request fee-free payouts, and track every movement in one ledger.";
+  "INSTANT PAYMENT is a digital wallet: send money to any @handle, add funds with a deposit code, request payouts with a clearly stated flat fee, and track every movement in one ledger.";
 const ALT_TEXT = "INSTANT PAYMENT — a digital wallet with one ledger for every movement";
 
 /**

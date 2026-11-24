@@ -46,8 +46,12 @@ export type TransactionRecord = {
   reference: string;
   type: TransactionType;
   status: TransactionStatus;
+  /** What the user asked for. This — never amount + fee — is what was debited. */
   amountCents: number;
+  /** Informational flat withdrawal fee. Never held from or added to a balance. */
   feeCents: number;
+  /** Admin-supplied reason stored beside the fee when the request was made. */
+  feeReason: string | null;
   note: string | null;
   destination: string | null;
   failureReason: string | null;
@@ -59,6 +63,20 @@ export type TransactionRecord = {
   resolvedAt: Date | null;
   resolvedById: string | null;
   createdAt: Date;
+};
+
+/**
+ * The single withdrawal-fee configuration row.
+ *
+ * `feeCents` is a flat amount in integer cents — not a percentage. It is
+ * recorded on a withdrawal for the customer's information and is never taken
+ * out of a wallet, so a $500 fee on a $10,000 request still debits $10,000.
+ */
+export type WithdrawalFeeSettings = {
+  feeCents: number;
+  feeReason: string;
+  updatedAt: Date | null;
+  updatedByUsername: string | null;
 };
 
 export type DepositCodeRecord = {

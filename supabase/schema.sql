@@ -76,6 +76,7 @@ create table if not exists public.transactions (
   status public.transaction_status not null,
   amount_cents bigint not null check (amount_cents >= 0),
   fee_cents bigint not null default 0 check (fee_cents >= 0),
+  fee_reason text,
   note text,
   destination text,
   failure_reason text,
@@ -95,6 +96,20 @@ create index if not exists transactions_recipient_created_idx
   on public.transactions (recipient_id, created_at desc);
 create index if not exists transactions_status_idx on public.transactions (status, type);
 create index if not exists transactions_deposit_code_idx on public.transactions (deposit_code_id);
+
+-- The single flat withdrawal fee. Informational only: request_withdrawal records
+-- it on the request without debiting it, and admin_resolve_withdrawal refunds
+-- only the requested amount. Written exclusively by
+-- admin_update_withdrawal_fee(); read by customers and by the console.
+create table if not exists public.withdrawal_fee_settings (
+  id text primary key default 'default',
+  fee_cents bigint not null default 0 check (fee_cents >= 0),
+  fee_reason text not null default '',
+  updated_by uuid references public.profiles (id) on delete set null,
+  updated_at timestamptz not null default now()
+);
+
+insert into public.withdrawal_fee_settings (id) values ('default') on conflict (id) do nothing;
 
 create table if not exists public.chat_settings (
   id text primary key default 'default',
@@ -271,6 +286,17 @@ with (security_invoker = false) as
   from public.chat_settings
   where id = 'default';
 
+-- The flat withdrawal fee a signed-in customer may see before requesting a
+-- payout: pricing is public information, the settings row's author is not.
+create or replace view public.public_withdrawal_fee_settings
+with (security_invoker = false) as
+  select
+    fee_cents,
+    fee_reason,
+    updated_at
+  from public.withdrawal_fee_settings
+  where id = 'default';
+
 -- The codes a customer touched: their own receipts can name the code they used
 -- without exposing the whole issue list to every visitor.
 create or replace view public.my_deposit_codes
@@ -303,9 +329,19 @@ with (security_invoker = false) as
     t.sender_balance_after_cents as balance_after_cents,
     t.resolved_at,
     t.resolved_by,
-    t.created_at
+    t.created_at,
+    t.fee_reason
   from public.transactions t
-  where t.type = 'WITHDRAWAL';
+  where t.type = 'WITHDRAWAL'
+    and (
+      t.sender_id = auth.uid()
+      or exists (
+        select 1
+        from public.profiles p
+        where p.id = auth.uid()
+          and p.is_admin = true
+      )
+    );
 
 -- ---------------------------------------------------------------------------
 -- Row Level Security
@@ -315,6 +351,7 @@ alter table public.profiles enable row level security;
 alter table public.deposit_codes enable row level security;
 alter table public.transactions enable row level security;
 alter table public.chat_settings enable row level security;
+alter table public.withdrawal_fee_settings enable row level security;
 
 -- Tables: read only for clients. No insert/update/delete policy exists anywhere,
 -- which is what makes "customers cannot edit their own balance" structural
@@ -323,14 +360,17 @@ revoke all on public.profiles from anon, authenticated;
 revoke all on public.deposit_codes from anon, authenticated;
 revoke all on public.transactions from anon, authenticated;
 revoke all on public.chat_settings from anon, authenticated;
+revoke all on public.withdrawal_fee_settings from anon, authenticated;
 
 grant select on public.profiles to authenticated;
 grant select on public.deposit_codes to authenticated;
 grant select on public.transactions to authenticated;
 grant select on public.chat_settings to authenticated;
+grant select on public.withdrawal_fee_settings to authenticated;
 
 grant select on public.public_profiles to anon, authenticated;
 grant select on public.public_chat_settings to anon, authenticated;
+grant select on public.public_withdrawal_fee_settings to authenticated;
 grant select on public.withdrawal_requests to authenticated;
 grant select on public.my_deposit_codes to authenticated;
 
@@ -353,6 +393,14 @@ drop policy if exists chat_settings_select_admin on public.chat_settings;
 create policy chat_settings_select_admin on public.chat_settings
   for select to authenticated
   using (public.is_admin());
+
+-- The withdrawal fee is pricing, not a secret: any signed-in customer may read
+-- it so the withdrawal screen can disclose it before a request is submitted.
+-- There is still no write policy — only admin_update_withdrawal_fee() writes.
+drop policy if exists withdrawal_fee_settings_select_authenticated on public.withdrawal_fee_settings;
+create policy withdrawal_fee_settings_select_authenticated on public.withdrawal_fee_settings
+  for select to authenticated
+  using (id = 'default');
 
 -- ---------------------------------------------------------------------------
 -- References
@@ -588,6 +636,8 @@ as $$
 declare
   v_user public.profiles;
   v_destination text := left(btrim(coalesce(p_destination, '')), 160);
+  v_fee bigint := 0;
+  v_fee_reason text;
   v_tx public.transactions;
 begin
   if auth.uid() is null then
@@ -615,20 +665,31 @@ begin
     return jsonb_build_object('ok', false, 'code', 'INSUFFICIENT_FUNDS');
   end if;
 
+  -- The active fee, read here rather than trusted from the caller.
+  select s.fee_cents, s.fee_reason
+    into v_fee, v_fee_reason
+    from public.withdrawal_fee_settings s
+   where s.id = 'default';
+
+  v_fee := coalesce(v_fee, 0);
+  v_fee_reason := nullif(left(btrim(coalesce(v_fee_reason, '')), 120), '');
+
   perform public.allow_ledger_write();
 
-  -- The amount is held, so the same funds cannot be requested twice.
+  -- The amount is held, so the same funds cannot be requested twice. The fee is
+  -- not part of this movement: exactly the requested amount leaves the wallet.
   update public.profiles
      set balance_cents = balance_cents - p_amount_cents
    where id = v_user.id
   returning * into v_user;
 
   insert into public.transactions (
-    reference, type, status, amount_cents, fee_cents, destination,
+    reference, type, status, amount_cents, fee_cents, fee_reason, destination,
     sender_id, sender_balance_after_cents
   ) values (
-    public.new_reference('WDR'), 'WITHDRAWAL', 'PENDING', p_amount_cents, 0, v_destination,
-    v_user.id, v_user.balance_cents
+    public.new_reference('WDR'), 'WITHDRAWAL', 'PENDING', p_amount_cents, v_fee,
+    case when v_fee > 0 then v_fee_reason else null end,
+    v_destination, v_user.id, v_user.balance_cents
   )
   returning * into v_tx;
 
@@ -637,7 +698,9 @@ begin
     'reference', v_tx.reference,
     'amountCents', v_tx.amount_cents,
     'feeCents', v_tx.fee_cents,
-    'totalCents', v_tx.amount_cents + v_tx.fee_cents,
+    'feeReason', v_tx.fee_reason,
+    -- The total request is the requested amount: the fee is never debited.
+    'totalCents', v_tx.amount_cents,
     'destination', v_tx.destination,
     'balanceAfterCents', v_user.balance_cents,
     'createdAt', v_tx.created_at
@@ -982,6 +1045,113 @@ begin
 end;
 $$;
 
+create or replace function public.admin_get_withdrawal_fee()
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+  v_settings public.withdrawal_fee_settings;
+  v_admin_username text;
+begin
+  perform public.assert_admin();
+
+  select * into v_settings
+    from public.withdrawal_fee_settings
+   where id = 'default';
+
+  if not found then
+    return jsonb_build_object(
+      'feeCents', 0,
+      'feeReason', '',
+      'updatedAt', null,
+      'updatedByUsername', null
+    );
+  end if;
+
+  if v_settings.updated_by is not null then
+    select p.username into v_admin_username
+      from public.profiles p
+     where p.id = v_settings.updated_by;
+  end if;
+
+  return jsonb_build_object(
+    'feeCents', coalesce(v_settings.fee_cents, 0),
+    'feeReason', coalesce(v_settings.fee_reason, ''),
+    'updatedAt', v_settings.updated_at,
+    'updatedByUsername', v_admin_username
+  );
+end;
+$$;
+
+-- Saves the flat fee and decides what it applies to. `p_apply_to` is exactly
+-- FUTURE, PENDING or BOTH, and the UPDATE is pinned to status = 'PENDING', so a
+-- fee change can never touch a completed or declined withdrawal.
+create or replace function public.admin_update_withdrawal_fee(
+  p_fee_cents bigint,
+  p_fee_reason text,
+  p_apply_to text
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_admin uuid := public.assert_admin();
+  v_fee bigint := coalesce(p_fee_cents, 0);
+  v_reason text := left(btrim(coalesce(p_fee_reason, '')), 120);
+  v_apply text := upper(btrim(coalesce(p_apply_to, 'FUTURE')));
+  v_updated integer := 0;
+  v_settings public.withdrawal_fee_settings;
+  v_admin_username text;
+begin
+  if v_fee < 0 or v_fee > 100000000 then
+    raise exception 'INVALID_FEE_AMOUNT';
+  end if;
+  if v_apply not in ('FUTURE', 'PENDING', 'BOTH') then
+    raise exception 'INVALID_APPLY_TO';
+  end if;
+  if v_fee > 0 and char_length(v_reason) < 3 then
+    raise exception 'INVALID_FEE_REASON';
+  end if;
+
+  insert into public.withdrawal_fee_settings (id, fee_cents, fee_reason, updated_by, updated_at)
+  values ('default', v_fee, v_reason, v_admin, now())
+  on conflict (id) do update
+    set fee_cents = excluded.fee_cents,
+        fee_reason = excluded.fee_reason,
+        updated_by = excluded.updated_by,
+        updated_at = now()
+  returning * into v_settings;
+
+  if v_apply in ('PENDING', 'BOTH') then
+    update public.transactions
+       set fee_cents = v_fee,
+           fee_reason = case when v_fee > 0 then nullif(v_reason, '') else null end
+     where type = 'WITHDRAWAL'
+       and status = 'PENDING';
+
+    get diagnostics v_updated = row_count;
+  end if;
+
+  select p.username into v_admin_username
+    from public.profiles p
+   where p.id = v_admin;
+
+  return jsonb_build_object(
+    'feeCents', v_settings.fee_cents,
+    'feeReason', v_settings.fee_reason,
+    'applyTo', v_apply,
+    'updatedPending', v_updated,
+    'updatedAt', v_settings.updated_at,
+    'updatedByUsername', v_admin_username
+  );
+end;
+$$;
+
 create or replace function public.admin_resolve_withdrawal(
   p_transaction_id uuid,
   p_outcome text,
@@ -1012,15 +1182,17 @@ begin
     raise exception 'WITHDRAWAL_ALREADY_RESOLVED';
   end if;
 
+  -- Declining refunds exactly what was held — the requested amount. The fee was
+  -- never taken from the wallet, so it is never returned to it.
   if v_outcome = 'FAILED' and v_tx.sender_id is not null then
     perform public.allow_ledger_write();
 
     update public.profiles
-       set balance_cents = balance_cents + v_tx.amount_cents + v_tx.fee_cents
+       set balance_cents = balance_cents + v_tx.amount_cents
      where id = v_tx.sender_id
     returning * into v_sender;
 
-    v_refunded := v_tx.amount_cents + v_tx.fee_cents;
+    v_refunded := v_tx.amount_cents;
   end if;
 
   update public.transactions
@@ -1039,7 +1211,9 @@ begin
   return jsonb_build_object(
     'reference', v_tx.reference,
     'status', v_tx.status,
-    'refundedCents', v_refunded
+    'refundedCents', v_refunded,
+    'amountCents', v_tx.amount_cents,
+    'feeCents', v_tx.fee_cents
   );
 end;
 $$;
@@ -1213,6 +1387,9 @@ $$;
 revoke execute on function public.assert_admin() from public, anon, authenticated;
 revoke execute on function public.allow_ledger_write() from public, anon, authenticated;
 
+revoke execute on function public.admin_get_withdrawal_fee() from public, anon;
+revoke execute on function public.admin_update_withdrawal_fee(bigint, text, text) from public, anon;
+
 grant execute on function public.is_admin() to anon, authenticated;
 grant execute on function public.email_for_identifier(text) to anon, authenticated;
 grant execute on function public.username_available(text) to anon, authenticated;
@@ -1232,6 +1409,8 @@ grant execute on function public.admin_create_deposit_code(text, bigint, text, b
 grant execute on function public.admin_set_code_active(uuid, boolean) to authenticated;
 grant execute on function public.admin_delete_deposit_code(uuid) to authenticated;
 grant execute on function public.admin_seed_deposit_codes() to authenticated;
+grant execute on function public.admin_get_withdrawal_fee() to authenticated;
+grant execute on function public.admin_update_withdrawal_fee(bigint, text, text) to authenticated;
 grant execute on function public.admin_resolve_withdrawal(uuid, text, text) to authenticated;
 grant execute on function public.admin_delete_transaction(uuid) to authenticated;
 grant execute on function public.admin_clear_transactions(text) to authenticated;

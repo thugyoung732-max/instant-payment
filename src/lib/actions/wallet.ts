@@ -226,7 +226,10 @@ export type WithdrawalResult =
       ok: true;
       reference: string;
       amountCents: number;
+      /** Informational flat fee recorded on the request. Never debited. */
       feeCents: number;
+      feeReason: string | null;
+      /** Total withdrawal request — the requested amount, fee excluded. */
       totalCents: number;
       destination: string;
       balanceAfterCents: number;
@@ -291,12 +294,22 @@ export async function withdrawAction(input: {
 
   refreshWalletViews();
 
+  const amountCents = Number(payload.amountCents ?? parsed.data.amountCents);
+
   return {
     ok: true,
     reference: String(payload.reference ?? ""),
-    amountCents: Number(payload.amountCents ?? parsed.data.amountCents),
-    feeCents: Number(payload.feeCents ?? 0),
-    totalCents: Number(payload.totalCents ?? parsed.data.amountCents),
+    amountCents,
+    feeCents: Number(payload.feeCents ?? payload.fee_cents ?? 0),
+    feeReason:
+      typeof payload.feeReason === "string"
+        ? payload.feeReason
+        : typeof payload.fee_reason === "string"
+          ? payload.fee_reason
+          : null,
+    // The fee is shown beside the request but is never part of what leaves the
+    // wallet, so the total request is always exactly the requested amount.
+    totalCents: amountCents,
     destination: String(payload.destination ?? label),
     balanceAfterCents: Number(payload.balanceAfterCents ?? 0),
     createdAt: String(payload.createdAt ?? new Date().toISOString()),

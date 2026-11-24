@@ -70,7 +70,8 @@ export function ExportCsvButton(
           "status",
           "amount_usd",
           "fee_usd",
-          "total_usd",
+          "fee_reason",
+          "debited_usd",
           "currency",
           "sender_username",
           "sender_email",
@@ -100,7 +101,10 @@ export function ExportCsvButton(
             row.status,
             (row.amountCents / 100).toFixed(2),
             (row.feeCents / 100).toFixed(2),
-            ((row.amountCents + row.feeCents) / 100).toFixed(2),
+            row.feeReason ?? "",
+            // The fee is never debited, so what left the wallet is always the
+            // requested amount — never amount + fee.
+            (row.amountCents / 100).toFixed(2),
             "USD",
             row.sender?.username ?? "",
             "",

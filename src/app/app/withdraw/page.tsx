@@ -4,9 +4,10 @@ import { Info } from "lucide-react";
 
 import { WithdrawForm } from "@/components/fairmoney/withdraw-form";
 import { requireProfile } from "@/lib/auth";
+import { getPublicWithdrawalFee } from "@/lib/data/queries";
 
 export default async function WithdrawPage() {
-  const profile = await requireProfile();
+  const [profile, fee] = await Promise.all([requireProfile(), getPublicWithdrawalFee()]);
 
   return (
     <div className="space-y-8">
@@ -17,11 +18,12 @@ export default async function WithdrawPage() {
         </h1>
         <p className="mt-3 text-[13.5px] leading-relaxed text-muted-foreground">
           Choose where the money should go, then confirm. Only the amount you ask for is held from
-          your balance while the request is reviewed — no fees are charged.
+          your balance while the request is reviewed. Any withdrawal fee is shown alongside the
+          request and is never taken out of your wallet.
         </p>
       </header>
 
-      <WithdrawForm balanceCents={profile.balanceCents} />
+      <WithdrawForm balanceCents={profile.balanceCents} fee={fee} />
 
       <p className="fm-notice border border-border bg-card/70 text-muted-foreground">
         <Info className="mt-0.5 h-4 w-4 shrink-0" />

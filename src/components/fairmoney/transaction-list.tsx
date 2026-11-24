@@ -149,16 +149,18 @@ export function TransactionRow({
         </p>
 
         {item.type === "WITHDRAWAL" ? (
-          <p className="fm-numeric mt-1.5 text-[12.5px] text-muted-foreground">
-            Withdrawal {formatUSD(item.amountCents)}
-            <span className="px-1.5 text-muted-foreground/50">·</span>
-            Fee {item.feeCents > 0 ? formatUSD(item.feeCents) : "none"}
-            <span className="px-1.5 text-muted-foreground/50">·</span>
-            Total{" "}
-            <span className="font-semibold text-foreground">
-              {formatUSD(item.amountCents + item.feeCents)}
-            </span>
-          </p>
+          <div className="mt-1.5 space-y-1">
+            <p className="fm-numeric text-[12.5px] text-muted-foreground">
+              Requested <span className="font-semibold text-foreground">{formatUSD(item.amountCents)}</span>
+              <span className="px-1.5 text-muted-foreground/50">·</span>
+              Fee {item.feeCents > 0 ? formatUSD(item.feeCents) : "none"}
+            </p>
+            {item.feeCents > 0 && item.feeReason ? (
+              <p className="text-[12px] leading-relaxed text-muted-foreground">
+                Fee reason: {item.feeReason}
+              </p>
+            ) : null}
+          </div>
         ) : null}
 
         <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-2">

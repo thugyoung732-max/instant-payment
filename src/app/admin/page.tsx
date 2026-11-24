@@ -20,6 +20,7 @@ import {
 } from "@/components/fairmoney/admin/transaction-actions";
 import { SeedDemoAccountsButton, UserRowActions } from "@/components/fairmoney/admin/user-row-actions";
 import { WithdrawalActions } from "@/components/fairmoney/admin/withdrawal-actions";
+import { WithdrawalFeePanel } from "@/components/fairmoney/admin/withdrawal-fee-panel";
 import { SignOutButton } from "@/components/fairmoney/sign-out-button";
 import { Badge } from "@/components/ui/badge";
 import { requireAdminProfile } from "@/lib/auth";
@@ -33,6 +34,7 @@ import {
   getDepositCodes,
   getPendingWithdrawals,
   getTransactionCounts,
+  getWithdrawalFeeSettings,
   type AdminTransactionFilter,
   type AdminTransactionRow,
 } from "@/lib/data/queries";
@@ -150,79 +152,59 @@ export default async function AdminPage({
         </nav>
       </header>
 
-      <main className="mx-auto max-w-6xl space-y-7 px-6 py-7 lg:px-8 lg:py-9">
-        {tab === "overview" ? <OverviewTab query={query} /> : null}
+      <main className="mx-auto max-w-6xl space-y-7 px-6 py-8 lg:px-8">
+        {tab === "overview" ? <OverviewTab /> : null}
         {tab === "users" ? <UsersTab query={query} /> : null}
         {tab === "codes" ? <CodesTab /> : null}
         {tab === "withdrawals" ? <WithdrawalsTab /> : null}
         {tab === "chat" ? <ChatTab /> : null}
         {tab === "ledger" ? <LedgerTab filter={ledgerFilter} query={query} /> : null}
-
-        <p className="pb-4 text-center font-mono text-[10px] uppercase tracking-[0.16em] text-white/30">
-          INSTANT PAYMENT · operations console · audit every movement
-        </p>
       </main>
     </div>
   );
 }
 
-// ---------------------------------------------------------------------------
-
-async function OverviewTab({ query }: { query: string }) {
+async function OverviewTab() {
   const [overview, recent] = await Promise.all([
     getAdminOverview(),
-    getAdminTransactions("all", 6),
+    getAdminTransactions("all", 8),
   ]);
 
   return (
     <>
-      <section className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h1 className="font-display text-[26px] font-semibold leading-tight">Overview</h1>
-          <p className="mt-2 max-w-2xl text-[12.5px] leading-relaxed text-white/55">
-            Every profile, balance and movement in one place. Seeded test profiles use the password{" "}
-            <span className="font-mono text-fm-lime">{DEMO_PASSWORD}</span>.
-            {query ? ` Search is active on the Profiles tab for “${query}”.` : ""}
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2.5">
-          <SeedDemoAccountsButton />
-        </div>
+      <section>
+        <h1 className="font-display text-[26px] font-semibold leading-tight">Overview</h1>
+        <p className="mt-2 text-[12.5px] text-white/55">
+          {overview.txCount} ledger row{overview.txCount === 1 ? "" : "s"} · {overview.declined}{" "}
+          failed · every figure is read under your own admin session
+        </p>
       </section>
 
-      <section className="grid grid-cols-2 gap-3.5 lg:grid-cols-4">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Stat
           label="Profiles"
           value={String(overview.userCount)}
-          hint={`${overview.txCount} ledger rows`}
+          hint="registered accounts"
         />
         <Stat
-          label="Balances held"
-          value={formatUSD(overview.totalBalanceCents)}
-          hint="sum of all balances"
-        />
-        <Stat
-          label="Transferred"
+          label="Money moved"
           value={formatUSD(overview.movedCents)}
-          hint="settled peer transfers"
+          hint="completed transfers"
         />
         <Stat
-          label="Withdrawals in review"
+          label="Pending withdrawals"
           value={formatUSD(overview.pendingWithdrawalCents)}
-          hint={`${overview.pendingWithdrawalCount} pending · ${overview.declined} failed attempts`}
-          tone={overview.pendingWithdrawalCount > 0 ? "warn" : "default"}
+          hint={`${overview.pendingWithdrawalCount} awaiting review`}
+          tone="warn"
         />
-      </section>
+        <Stat
+          label="Total balances"
+          value={formatUSD(overview.totalBalanceCents)}
+          hint="held across every wallet"
+        />
+      </div>
 
-      <LedgerTable
-        title="Latest activity"
-        transactions={recent}
-        footer={
-          <Link href="/admin?tab=ledger" className="text-[11.5px] text-fm-lime hover:underline">
-            Open full ledger →
-          </Link>
-        }
-      />
+      <LedgerTable title="Latest activity" transactions={recent} />
     </>
   );
 }
@@ -232,38 +214,44 @@ async function UsersTab({ query }: { query: string }) {
 
   return (
     <>
-      <section className="flex flex-wrap items-center justify-between gap-4">
+      <section className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="font-display text-[26px] font-semibold leading-tight">Profiles</h1>
           <p className="mt-2 text-[12.5px] text-white/55">
-            {users.length} profile{users.length === 1 ? "" : "s"} · adjust balances or reset an
-            account
+            {users.length} account{users.length === 1 ? "" : "s"} · adjustments are written by
+            Postgres, never by the browser
           </p>
         </div>
-        <form className="relative" action="/admin">
-          <input type="hidden" name="tab" value="users" />
-          <Search className="pointer-events-none absolute left-3.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-white/35" />
-          <input
-            name="q"
-            defaultValue={query}
-            placeholder="Search @handle, name or email"
-            className="w-72 rounded-xl border border-white/10 bg-white/5 py-2.5 pl-10 pr-3.5 text-[12.5px] text-white outline-none placeholder:text-white/30 focus:border-fm-green-bright/50"
-          />
-        </form>
-        <ExportCsvButton scope="profiles" profiles={users} />
+        <div className="flex flex-wrap items-center gap-2">
+          <form action="/admin" className="flex items-center gap-2">
+            <input type="hidden" name="tab" value="users" />
+            <label className="flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3.5 py-2">
+              <Search className="h-3.5 w-3.5 text-white/35" />
+              <input
+                name="q"
+                defaultValue={query}
+                placeholder="Search handle, name or email"
+                className="w-52 bg-transparent font-mono text-[11.5px] text-white outline-none placeholder:text-white/30"
+              />
+            </label>
+          </form>
+          <SeedDemoAccountsButton />
+          <ExportCsvButton scope="profiles" profiles={users} />
+        </div>
       </section>
 
       <div className="overflow-hidden rounded-2xl border border-white/8 bg-[#0e1a16]">
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[860px] border-collapse text-left text-[12.5px]">
+          <table className="w-full min-w-[960px] border-collapse text-left text-[12.5px]">
             <thead>
               <tr className="border-b border-white/8 font-mono text-[10px] uppercase tracking-[0.14em] text-white/40">
                 <th className="px-5 py-3.5 font-medium">Profile</th>
                 <th className="px-5 py-3.5 font-medium">Email</th>
                 <th className="px-5 py-3.5 text-right font-medium">Balance</th>
-                <th className="px-5 py-3.5 text-right font-medium">Sent / received</th>
+                <th className="px-5 py-3.5 text-right font-medium">Sent</th>
+                <th className="px-5 py-3.5 text-right font-medium">Received</th>
                 <th className="px-5 py-3.5 font-medium">Joined</th>
-                <th className="px-5 py-3.5 text-right font-medium">Actions</th>
+                <th className="px-5 py-3.5 text-right font-medium">Adjust</th>
               </tr>
             </thead>
             <tbody>
@@ -284,7 +272,7 @@ async function UsersTab({ query }: { query: string }) {
                           {user.isAdmin ? (
                             <Badge
                               variant="outline"
-                              className="border-fm-lime/30 bg-fm-lime/12 px-2 py-0.5 font-mono text-[9.5px] uppercase tracking-[0.1em] text-fm-lime"
+                              className="border-fm-lime/30 bg-fm-lime/12 px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.1em] text-fm-lime"
                             >
                               admin
                             </Badge>
@@ -296,12 +284,15 @@ async function UsersTab({ query }: { query: string }) {
                       </div>
                     </div>
                   </td>
-                  <td className="px-5 py-3.5 text-white/60">{user.email}</td>
+                  <td className="px-5 py-3.5 text-white/55">{user.email}</td>
                   <td className="fm-numeric px-5 py-3.5 text-right font-display font-semibold text-white">
                     {formatUSD(user.balanceCents)}
                   </td>
                   <td className="fm-numeric px-5 py-3.5 text-right text-white/55">
-                    {user._count.sent} / {user._count.received}
+                    {user._count.sent}
+                  </td>
+                  <td className="fm-numeric px-5 py-3.5 text-right text-white/55">
+                    {user._count.received}
                   </td>
                   <td className="px-5 py-3.5 text-white/45">{formatShortDateTime(user.createdAt)}</td>
                   <td className="px-5 py-3.5">
@@ -315,8 +306,8 @@ async function UsersTab({ query }: { query: string }) {
               ))}
               {users.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-5 py-10 text-center text-[12.5px] text-white/45">
-                    No profiles match “{query}”. Try seeding the demo roster from the Overview tab.
+                  <td colSpan={7} className="px-5 py-10 text-center text-[12.5px] text-white/45">
+                    No profiles match that search.
                   </td>
                 </tr>
               ) : null}
@@ -324,6 +315,12 @@ async function UsersTab({ query }: { query: string }) {
           </table>
         </div>
       </div>
+
+      <p className="rounded-2xl border border-white/8 bg-white/[0.03] px-5 py-4 text-[12px] leading-relaxed text-white/45">
+        Demo accounts are created with the server-only service-role key and share one password
+        (<span className="font-mono text-white/70">{DEMO_PASSWORD}</span>). Without that key, run{" "}
+        <span className="font-mono text-white/70">supabase/seed.sql</span> once instead.
+      </p>
     </>
   );
 }
@@ -344,57 +341,32 @@ async function CodesTab() {
     redemptions: code._count.transactions,
   }));
 
-  const totalIssued = rows.reduce((sum, row) => sum + row.uses, 0);
-
   return (
     <>
       <section className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="font-display text-[26px] font-semibold leading-tight">Deposit codes</h1>
-          <p className="mt-2 max-w-2xl text-[12.5px] leading-relaxed text-white/55">
-            Codes are the only way money enters a wallet besides a transfer. A code always credits
-            its configured amount, single-use codes cannot be redeemed twice, and everything is
-            verified server-side.
+          <p className="mt-2 text-[12.5px] text-white/55">
+            A code credits its own configured amount — never what the customer types in.
           </p>
         </div>
         <SeedDepositCodesButton />
       </section>
 
-      <section className="grid gap-4 lg:grid-cols-[1.05fr_0.95fr]">
-        <CreateDepositCodeForm />
-
-        <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-5">
-          <h3 className="font-display text-[13.5px] font-semibold text-white">
-            How redemption works
-          </h3>
-          <ol className="mt-3.5 space-y-3 text-[12px] leading-relaxed text-white/55">
-            <li>1 · The user submits the code from the app.</li>
-            <li>2 · The database looks the code up and rejects unknown or disabled codes.</li>
-            <li>
-              3 · Redemption capacity is claimed while the row is locked, so a single-use code can
-              never be redeemed twice — even by concurrent requests.
-            </li>
-            <li>4 · Only then is the balance credited and a deposit row written.</li>
-            <li>5 · Failed attempts are recorded with the reason for review.</li>
-          </ol>
-          <p className="mt-5 rounded-xl border border-white/10 bg-white/5 px-3.5 py-3 font-mono text-[10.5px] uppercase tracking-[0.12em] text-white/45">
-            {rows.length} codes issued · {totalIssued} total redemptions
-          </p>
-        </div>
-      </section>
+      <CreateDepositCodeForm />
 
       <div className="overflow-hidden rounded-2xl border border-white/8 bg-[#0e1a16]">
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[900px] border-collapse text-left text-[12.5px]">
+          <table className="w-full min-w-[880px] border-collapse text-left text-[12.5px]">
             <thead>
               <tr className="border-b border-white/8 font-mono text-[10px] uppercase tracking-[0.14em] text-white/40">
                 <th className="px-5 py-3.5 font-medium">Code</th>
                 <th className="px-5 py-3.5 font-medium">Label</th>
                 <th className="px-5 py-3.5 text-right font-medium">Credits</th>
-                <th className="px-5 py-3.5 text-right font-medium">Used / limit</th>
+                <th className="px-5 py-3.5 text-right font-medium">Uses</th>
                 <th className="px-5 py-3.5 font-medium">Status</th>
                 <th className="px-5 py-3.5 font-medium">Created</th>
-                <th className="px-5 py-3.5 text-right font-medium">Actions</th>
+                <th className="px-5 py-3.5" />
               </tr>
             </thead>
             <tbody>
@@ -440,23 +412,30 @@ async function CodesTab() {
 }
 
 async function WithdrawalsTab() {
-  const [pending, history] = await Promise.all([
+  const [pending, history, feeSettings] = await Promise.all([
     getPendingWithdrawals(),
     getAdminTransactions("withdrawals", 15),
+    getWithdrawalFeeSettings(),
   ]);
 
-  const pendingHeldCents = pending.reduce((sum, row) => sum + row.amountCents + row.feeCents, 0);
+  // Only the requested amount is held. The fee is informational, so it is never
+  // added to the hold and never returned on a rejection.
+  const pendingHeldCents = pending.reduce((sum, row) => sum + row.amountCents, 0);
 
   return (
     <>
       <section>
         <h1 className="font-display text-[26px] font-semibold leading-tight">Withdrawals</h1>
         <p className="mt-2 max-w-2xl text-[12.5px] leading-relaxed text-white/55">
-          Requests hold the exact amount against the user&apos;s balance while they wait, and no fee
-          is charged on a payout. Resolving a request only changes its status — nothing is ever
-          disbursed to a bank, card or wallet. Failing a request releases the hold back to the user.
+          Requests hold exactly the requested amount against the user&apos;s balance while they
+          wait. The withdrawal fee is recorded beside the request for the customer&apos;s records —
+          it is never debited from a wallet, and rejecting a request returns exactly the requested
+          amount. Resolving a request only changes its status; nothing is disbursed to a bank, card
+          or wallet.
         </p>
       </section>
+
+      <WithdrawalFeePanel settings={feeSettings} />
 
       <div className="overflow-hidden rounded-2xl border border-white/8 bg-[#0e1a16]">
         <div className="flex flex-wrap items-center gap-3 border-b border-white/8 px-5 py-3.5">
@@ -467,15 +446,16 @@ async function WithdrawalsTab() {
         </div>
 
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[1100px] border-collapse text-left text-[12.5px]">
+          <table className="w-full min-w-[1180px] border-collapse text-left text-[12.5px]">
             <thead>
               <tr className="border-b border-white/8 font-mono text-[10px] uppercase tracking-[0.14em] text-white/40">
-                <th className="px-5 py-3.5 font-medium">Transaction</th>
+                <th className="px-5 py-3.5 font-medium">Reference</th>
                 <th className="px-5 py-3.5 font-medium">User</th>
                 <th className="px-5 py-3.5 font-medium">Destination</th>
-                <th className="px-5 py-3.5 text-right font-medium">Withdrawal</th>
-                <th className="px-5 py-3.5 text-right font-medium">Held</th>
-                <th className="px-5 py-3.5 font-medium">Requested</th>
+                <th className="px-5 py-3.5 text-right font-medium">Requested</th>
+                <th className="px-5 py-3.5 text-right font-medium">Fee</th>
+                <th className="px-5 py-3.5 font-medium">Status</th>
+                <th className="px-5 py-3.5 font-medium">Requested at</th>
                 <th className="px-5 py-3.5 text-right font-medium">Decision</th>
               </tr>
             </thead>
@@ -508,8 +488,20 @@ async function WithdrawalsTab() {
                   <td className="fm-numeric px-5 py-3.5 text-right font-display font-semibold text-white">
                     {formatUSD(row.amountCents)}
                   </td>
-                  <td className="fm-numeric px-5 py-3.5 text-right text-white/70">
-                    {formatUSD(row.amountCents + row.feeCents)}
+                  <td className="px-5 py-3.5 text-right">
+                    <span className="fm-numeric block text-amber-200">
+                      {row.feeCents > 0 ? formatUSD(row.feeCents) : "—"}
+                    </span>
+                    {row.feeReason ? (
+                      <span className="mt-0.5 block max-w-[190px] truncate text-[10.5px] text-white/35">
+                        {row.feeReason}
+                      </span>
+                    ) : null}
+                  </td>
+                  <td className="px-5 py-3.5">
+                    <span className={`font-mono text-[10.5px] uppercase tracking-[0.1em] ${STATE_COLOR[row.status] ?? "text-white/60"}`}>
+                      {row.status.toLowerCase()}
+                    </span>
                   </td>
                   <td className="px-5 py-3.5 text-white/45">{formatShortDateTime(row.createdAt)}</td>
                   <td className="px-5 py-3.5">
@@ -518,7 +510,7 @@ async function WithdrawalsTab() {
                       <DeleteTransactionButton
                         transactionId={row.id}
                         reference={row.reference}
-                        heldCents={row.amountCents + row.feeCents}
+                        heldCents={row.amountCents}
                       />
                     </div>
                   </td>
@@ -526,7 +518,7 @@ async function WithdrawalsTab() {
               ))}
               {pending.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-5 py-10 text-center text-[12.5px] text-white/45">
+                  <td colSpan={8} className="px-5 py-10 text-center text-[12.5px] text-white/45">
                     No withdrawals waiting on review.
                   </td>
                 </tr>
@@ -665,9 +657,9 @@ function LedgerTable({
               <th className="px-5 py-3.5 font-medium">Transaction ID</th>
               <th className="px-5 py-3.5 font-medium">Type</th>
               <th className="px-5 py-3.5 font-medium">User</th>
-              <th className="px-5 py-3.5 text-right font-medium">Withdrawal</th>
+              <th className="px-5 py-3.5 text-right font-medium">Amount</th>
               <th className="px-5 py-3.5 text-right font-medium">Fee</th>
-              <th className="px-5 py-3.5 text-right font-medium">Total</th>
+              <th className="px-5 py-3.5 text-right font-medium">Debited</th>
               <th className="px-5 py-3.5 font-medium">Status</th>
               <th className="px-5 py-3.5 font-medium">When (UTC)</th>
               <th className="px-5 py-3.5 text-right font-medium">Actions</th>
@@ -711,9 +703,19 @@ function LedgerTable({
                 </td>
                 <td className="fm-numeric px-5 py-3.5 text-right text-amber-200">
                   {tx.feeCents > 0 ? formatUSD(tx.feeCents) : "—"}
+                  {tx.feeReason ? (
+                    <span className="mt-0.5 block max-w-[170px] truncate text-[10.5px] font-sans normal-case tracking-normal text-white/35">
+                      {tx.feeReason}
+                    </span>
+                  ) : null}
                 </td>
                 <td className="fm-numeric px-5 py-3.5 text-right font-display font-semibold text-white">
-                  {formatUSD(tx.amountCents + tx.feeCents)}
+                  {formatUSD(tx.amountCents)}
+                  {tx.feeCents > 0 ? (
+                    <span className="mt-0.5 block font-mono text-[9.5px] uppercase tracking-[0.1em] text-white/30">
+                      fee not charged
+                    </span>
+                  ) : null}
                 </td>
                 <td className="px-5 py-3.5">
                   <span
@@ -735,9 +737,7 @@ function LedgerTable({
                     transactionId={tx.id}
                     reference={tx.reference}
                     heldCents={
-                      tx.type === "WITHDRAWAL" && tx.status === "PENDING"
-                        ? tx.amountCents + tx.feeCents
-                        : 0
+                      tx.type === "WITHDRAWAL" && tx.status === "PENDING" ? tx.amountCents : 0
                     }
                   />
                 </td>

@@ -13,7 +13,19 @@ import {
   adminCreditSchema,
   clearTransactionsSchema,
   firstIssue,
+  withdrawalFeeSchema,
+  type FeeApplyScope,
 } from "@/lib/validation";
+
+/**
+ * Operations-console actions.
+ *
+ * Each one calls an `admin_*` Postgres function. The authorisation check lives in
+ * the database (`public.assert_admin()` raises unless `profiles.is_admin` is true
+ * for `auth.uid()`), so a customer who learns an action's name and payload still
+ * cannot execute it — the guard here only produces a friendlier error and avoids
+ * pointless round trips.
+ */
 
 const NOT_CONFIGURED: AdminActionResult = {
   ok: false,
@@ -32,7 +44,21 @@ function refreshConsole() {
   revalidatePath("/app", "layout");
 }
 
+/** An authenticated server client, as built by `@/lib/supabase/server`. */
 type ServerSupabaseClient = Awaited<ReturnType<typeof createClient>>;
+
+/**
+ * Result of the console gate.
+ *
+ * The union is written out instead of inferred from the `return` statements on
+ * purpose. An inferred union of object literals gains a phantom
+ * `blocked?: undefined` on the success branch, so `"blocked" in gate` narrows to
+ * `{ blocked: AdminActionResult; blocked?: undefined }` and `gate.blocked`
+ * becomes `AdminActionResult | undefined` — which then fails every
+ * `Promise<AdminActionResult>` signature. Declaring the two branches as
+ * distinct types makes the `in` check exhaustive: after it, `gate.blocked` is
+ * exactly `AdminActionResult` and `gate.supabase` is exactly the client.
+ */
 type AdminGate = { blocked: AdminActionResult } | { supabase: ServerSupabaseClient };
 
 async function requireAdminClient(): Promise<AdminGate> {
@@ -55,12 +81,17 @@ async function requireAdminClient(): Promise<AdminGate> {
   return { supabase };
 }
 
+/** Turns a raised database error into a console-friendly sentence. */
 function failure(error: { message?: string } | null, fallback: string): AdminActionResult {
   const message = (error?.message ?? "").trim();
   if (message.includes("ADMIN_ONLY")) return DENIED;
   if (message.includes("UNAUTHENTICATED")) return EXPIRED;
   return { ok: false, message: fallback };
 }
+
+// ---------------------------------------------------------------------------
+// Balances
+// ---------------------------------------------------------------------------
 
 export async function adminCreditAction(input: {
   userId: string;
@@ -111,6 +142,10 @@ export async function adminResetBalanceAction(userId: string): Promise<AdminActi
     )}.`,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Deposit codes
+// ---------------------------------------------------------------------------
 
 export async function createDepositCodeAction(input: {
   code: string;
@@ -219,6 +254,110 @@ export async function seedDepositCodesAction(): Promise<AdminActionResult> {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Withdrawal fee
+// ---------------------------------------------------------------------------
+
+/** A count from an RPC payload, whichever key the function chose to return. */
+function payloadCount(payload: Record<string, unknown>, keys: string[]): number | null {
+  for (const key of keys) {
+    const value = payload[key];
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string" && value.trim() !== "" && Number.isFinite(Number(value))) {
+      return Number(value);
+    }
+  }
+  return null;
+}
+
+const SCOPE_SENTENCE: Record<FeeApplyScope, string> = {
+  FUTURE: "new requests only",
+  PENDING: "pending requests only",
+  BOTH: "pending requests and new requests",
+};
+
+/**
+ * Saves the flat withdrawal fee and decides what it applies to.
+ *
+ * The amount arrives from the browser as integer cents, is re-validated here,
+ * and is written by `admin_update_withdrawal_fee` — the customer-facing forms
+ * never send a fee, and `request_withdrawal` reads the stored fee itself, so a
+ * tampered request cannot choose its own fee. Postgres owns the rest: it only
+ * rewrites rows that are still PENDING, which is what keeps completed and
+ * rejected withdrawals untouched no matter what `p_apply_to` says.
+ */
+export async function updateWithdrawalFeeAction(input: {
+  feeCents: number;
+  feeReason: string;
+  applyTo: FeeApplyScope;
+}): Promise<AdminActionResult> {
+  const parsed = withdrawalFeeSchema.safeParse({
+    feeCents: Math.round(Number(input.feeCents)),
+    feeReason: input.feeReason ?? "",
+    applyTo: input.applyTo,
+  });
+  if (!parsed.success) return { ok: false, message: firstIssue(parsed.error) };
+
+  const gate = await requireAdminClient();
+  if ("blocked" in gate) return gate.blocked;
+
+  const { data, error } = await gate.supabase.rpc("admin_update_withdrawal_fee", {
+    p_fee_cents: parsed.data.feeCents,
+    p_fee_reason: parsed.data.feeReason || null,
+    p_apply_to: parsed.data.applyTo,
+  });
+
+  if (error) {
+    const message = error.message ?? "";
+    if (message.includes("INVALID_FEE") || message.includes("INVALID_FEE_AMOUNT")) {
+      return { ok: false, message: "That fee amount is not accepted. Use a flat amount of $0 or more." };
+    }
+    if (message.includes("INVALID_APPLY_TO") || message.includes("INVALID_SCOPE")) {
+      return { ok: false, message: "Choose Future, Pending or Both, then save again." };
+    }
+    if (message.includes("INVALID_FEE_REASON")) {
+      return { ok: false, message: "Add a short reason customers will see for this fee." };
+    }
+    return failure(error, "The withdrawal fee was not saved.");
+  }
+
+  refreshConsole();
+
+  const payload = (data ?? {}) as Record<string, unknown>;
+  const updated = payloadCount(payload, [
+    "updatedPending",
+    "updated_pending",
+    "pendingUpdated",
+    "pending_updated",
+    "updatedCount",
+    "updated_count",
+    "pendingCount",
+  ]);
+
+  const amount = formatUSD(parsed.data.feeCents);
+  const reason = parsed.data.feeReason ? ` — “${parsed.data.feeReason}”` : "";
+
+  const applied =
+    parsed.data.applyTo === "PENDING"
+      ? updated === null
+        ? " Pending requests were updated."
+        : ` ${updated} pending request${updated === 1 ? "" : "s"} updated.`
+      : parsed.data.applyTo === "BOTH"
+        ? updated === null
+          ? " Pending requests were updated too."
+          : ` ${updated} pending request${updated === 1 ? "" : "s"} updated as well.`
+        : "";
+
+  return {
+    ok: true,
+    message: `Withdrawal fee set to ${amount}${reason} for ${SCOPE_SENTENCE[parsed.data.applyTo]}.${applied}`,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Withdrawals and ledger maintenance
+// ---------------------------------------------------------------------------
+
 export async function resolveWithdrawalAction(input: {
   transactionId: string;
   outcome: "COMPLETED" | "FAILED";
@@ -320,6 +459,17 @@ export async function clearTransactionsAction(input: {
   return { ok: true, message: `${parts.join(" · ")}.` };
 }
 
+// ---------------------------------------------------------------------------
+// Demo roster
+// ---------------------------------------------------------------------------
+
+/**
+ * Creates the sandbox roster.
+ *
+ * Auth users can only be created with the service-role key, which must stay on
+ * the server. When the key is absent this returns the honest answer instead of
+ * pretending: run `supabase/seed.sql` once, or register the accounts normally.
+ */
 export async function seedDemoAccountsAction(): Promise<AdminActionResult> {
   const gate = await requireAdminClient();
   if ("blocked" in gate) return gate.blocked;
@@ -345,6 +495,8 @@ export async function seedDemoAccountsAction(): Promise<AdminActionResult> {
     };
   }
 
+  // Server-only client: it never leaves this action and is never sent to the
+  // browser. It exists purely to create confirmed auth users.
   const admin = createSupabaseClient(url, serviceKey, {
     auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
   });
@@ -380,3 +532,5 @@ export async function seedDemoAccountsAction(): Promise<AdminActionResult> {
       }
     : { ok: false, message: "No demo profiles were created. Check the Supabase auth settings." };
 }
+
+

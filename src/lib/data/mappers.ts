@@ -15,6 +15,7 @@ import type {
   TransactionRecord,
   TransactionStatus,
   TransactionType,
+  WithdrawalFeeSettings,
 } from "./types";
 
 type Row = Record<string, unknown>;
@@ -89,6 +90,7 @@ export function mapTransaction(row: Row): TransactionRecord {
     status: text(row.status) as TransactionStatus,
     amountCents: cents(row.amount_cents),
     feeCents: cents(row.fee_cents),
+    feeReason: nullableText(row.fee_reason),
     note: nullableText(row.note),
     destination: nullableText(row.destination),
     failureReason: nullableText(row.failure_reason),
@@ -116,6 +118,64 @@ export function mapDepositCode(row: Row): DepositCodeRecord {
     lastUsedAt: nullableDate(row.last_used_at),
     createdById: nullableText(row.created_by),
     createdAt: date(row.created_at),
+  };
+}
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** A handle, or null when the value is really an id (e.g. `updated_by`). */
+function handleOnly(value: unknown): string | null {
+  const text = nullableText(value);
+  if (!text || UUID_PATTERN.test(text)) return null;
+  return text.replace(/^@+/, "") || null;
+}
+
+function firstValue(row: Row, keys: string[]): unknown {
+  for (const key of keys) {
+    if (row[key] !== undefined && row[key] !== null) return row[key];
+  }
+  return undefined;
+}
+
+/**
+ * Normalises the withdrawal-fee configuration.
+ *
+ * The same row reaches us three different ways — a table read (`fee_cents`), a
+ * jsonb RPC payload (`feeCents`), or a payload that nests the settings under a
+ * `settings`/`fee` key — so every shape is accepted here instead of in each
+ * caller. `null` means "no recognizable fee came back", which the callers show
+ * as a configuration notice rather than pretending the fee is zero.
+ */
+export function mapWithdrawalFeeSettings(payload: unknown): WithdrawalFeeSettings | null {
+  if (!payload || typeof payload !== "object") return null;
+
+  const outer = payload as Row;
+  const nested = [outer.settings, outer.fee, outer.configuration].find(
+    (value) => value && typeof value === "object",
+  );
+  const row = (nested ? { ...outer, ...(nested as Row) } : outer) as Row;
+
+  const rawFee = firstValue(row, ["feeCents", "fee_cents", "feeAmountCents", "fee_amount_cents"]);
+  if (rawFee === undefined) return null;
+
+  return {
+    feeCents: Math.max(0, cents(rawFee)),
+    feeReason: nullableText(firstValue(row, ["feeReason", "fee_reason", "reason"])) ?? "",
+    updatedAt: nullableDate(
+      firstValue(row, ["updatedAt", "updated_at", "lastUpdatedAt", "last_updated_at"]),
+    ),
+    // A raw `updated_by` uuid is not a handle: when the RPC is unavailable and
+    // the settings table is read directly, showing "@3f2a-…" would be worse than
+    // showing nothing at all.
+    updatedByUsername: handleOnly(
+      firstValue(row, [
+        "updatedByUsername",
+        "updated_by_username",
+        "updatedBy",
+        "updated_by",
+        "lastUpdatedBy",
+      ]),
+    ),
   };
 }
 

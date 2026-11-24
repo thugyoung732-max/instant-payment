@@ -33,6 +33,24 @@ export function parseAmountToCents(input: string): number | null {
   return cents;
 }
 
+/**
+ * Same input handling as `parseAmountToCents`, but zero is a valid answer.
+ *
+ * A withdrawal fee of $0.00 is meaningful — it means "no fee is charged" — so
+ * the fee input needs a parser that accepts it. Returns null only for input that
+ * is not a usable amount at all.
+ */
+export function parseFeeToCents(input: string): number | null {
+  const cleaned = input.replace(/[\s,$]/g, "").replace(/^USD/i, "");
+  if (!cleaned) return null;
+  if (!/^\d*(\.\d{0,2})?$/.test(cleaned)) return null;
+  const value = Number(cleaned);
+  if (!Number.isFinite(value) || value < 0) return null;
+  const cents = Math.round(value * 100);
+  if (cents > MAX_AMOUNT_CENTS) return null;
+  return cents;
+}
+
 /** 125050 -> "1250.50" for populating an <input>. */
 export function centsToInput(cents: number): string {
   return (cents / 100).toFixed(2);
