@@ -434,7 +434,7 @@ const [pending, history, feeSettings] = await Promise.all([
         </p>
       </section>
 
-      <WithdrawalFeePanel settings={feeSettings} />
+    <WithdrawalFeePanel users={users} />
 
       <div className="overflow-hidden rounded-2xl border border-white/8 bg-[#0e1a16]">
         <div className="flex flex-wrap items-center gap-3 border-b border-white/8 px-5 py-3.5">
