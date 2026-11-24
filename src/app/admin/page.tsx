@@ -411,12 +411,11 @@ async function CodesTab() {
   );
 }
 
-async function WithdrawalsTab() {
-  const [pending, history, feeSettings] = await Promise.all([
-    getPendingWithdrawals(),
-    getAdminTransactions("withdrawals", 15),
-    getWithdrawalFeeSettings(),
-  ]);
+const [pending, history, feeSettings] = await Promise.all([
+  getPendingWithdrawals(),
+  getAdminTransactions("withdrawals", 15),
+  getWithdrawalFeeSettings(),
+]);
 
   // Only the requested amount is held. The fee is informational, so it is never
   // added to the hold and never returned on a rejection.
