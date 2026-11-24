@@ -1,0 +1,7 @@
+[build.environment]
+  # The Supabase project URL and publishable (anon) key are public by design:
+  # Next.js inlines NEXT_PUBLIC_* values into the browser bundle, and data access
+  # is enforced by Row Level Security. Only these two keys are excluded from
+  # secrets scanning — every other value (e.g. SUPABASE_SERVICE_ROLE_KEY) is
+  # still scanned and must never be prefixed with NEXT_PUBLIC_.
+  SECRETS_SCAN_OMIT_KEYS = "NEXT_PUBLIC_SUPABASE_URL,NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,NEXT_PUBLIC_SUPABASE_ANON_KEY"
