@@ -16,6 +16,8 @@
 --     * admin_update_withdrawal_fee may rewrite fee_cents/fee_reason on rows
 --       that are still PENDING, and nothing else. Completed and declined rows
 --       are never touched, and a fee change never moves money.
+--     * admin_delete_transaction / admin_clear_transactions release exactly
+--       amount_cents for a PENDING withdrawal, and never the fee.
 --
 -- Canonical settings row: withdrawal_fee_settings.id = 'default'.
 --
@@ -396,7 +398,114 @@ end;
 $$;
 
 -- ---------------------------------------------------------------------------
--- 8. The request-shaped projection gains the fee reason
+-- 8. The deletion helpers release exactly the requested amount
+-- ---------------------------------------------------------------------------
+-- Both helpers can still reach a PENDING withdrawal — a direct RPC call, or a
+-- bulk clear that outruns the console's per-row pre-settlement. They used to
+-- release `amount_cents + fee_cents`, which now credits a fee the customer never
+-- paid; they release exactly the hold instead. Completed and declined rows are
+-- never refunded (the branch is pinned to PENDING), and no other transaction
+-- type is affected.
+
+create or replace function public.admin_delete_transaction(p_transaction_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_admin uuid := public.assert_admin();
+  v_tx public.transactions;
+  v_released bigint := 0;
+begin
+  select * into v_tx from public.transactions where id = p_transaction_id for update;
+  if not found then
+    raise exception 'TRANSACTION_NOT_FOUND';
+  end if;
+
+  if v_tx.type = 'WITHDRAWAL' and v_tx.status = 'PENDING' and v_tx.sender_id is not null then
+    perform public.allow_ledger_write();
+
+    update public.profiles
+       set balance_cents = balance_cents + v_tx.amount_cents
+     where id = v_tx.sender_id;
+
+    v_released := v_tx.amount_cents;
+  end if;
+
+  if v_tx.deposit_code_id is not null then
+    update public.deposit_codes
+       set uses = greatest(0, uses - 1)
+     where id = v_tx.deposit_code_id;
+    update public.deposit_codes
+       set last_used_at = null
+     where id = v_tx.deposit_code_id and uses = 0;
+  end if;
+
+  delete from public.transactions where id = v_tx.id;
+
+  return jsonb_build_object(
+    'reference', v_tx.reference,
+    'releasedCents', v_released
+  );
+end;
+$$;
+
+create or replace function public.admin_clear_transactions(p_scope text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_admin uuid := public.assert_admin();
+  v_row public.transactions;
+  v_deleted integer := 0;
+  v_released bigint := 0;
+  v_freed integer := 0;
+  v_scope text := upper(coalesce(p_scope, 'SETTLED'));
+begin
+  if v_scope not in ('ALL', 'SETTLED') then
+    raise exception 'INVALID_SCOPE';
+  end if;
+
+  perform public.allow_ledger_write();
+
+  for v_row in
+    select * from public.transactions
+    where v_scope = 'ALL' or status in ('COMPLETED', 'FAILED')
+    for update
+  loop
+    if v_row.type = 'WITHDRAWAL' and v_row.status = 'PENDING' and v_row.sender_id is not null then
+      update public.profiles
+         set balance_cents = balance_cents + v_row.amount_cents
+       where id = v_row.sender_id;
+      v_released := v_released + v_row.amount_cents;
+    end if;
+
+    if v_row.deposit_code_id is not null then
+      update public.deposit_codes
+         set uses = greatest(0, uses - 1)
+       where id = v_row.deposit_code_id;
+      v_freed := v_freed + 1;
+    end if;
+
+    delete from public.transactions where id = v_row.id;
+    v_deleted := v_deleted + 1;
+  end loop;
+
+  update public.deposit_codes set last_used_at = null where uses = 0;
+
+  return jsonb_build_object(
+    'deletedCount', v_deleted,
+    'releasedCents', v_released,
+    'freedCodes', v_freed
+  );
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- 9. The request-shaped projection gains the fee reason
 -- ---------------------------------------------------------------------------
 -- Appended at the end of the column list: `create or replace view` can add
 -- columns, but cannot reorder the ones already there.
@@ -433,7 +542,7 @@ with (security_invoker = false) as
 grant select on public.withdrawal_requests to authenticated;
 
 -- ---------------------------------------------------------------------------
--- 9. Execute grants
+-- 10. Execute grants
 -- ---------------------------------------------------------------------------
 
 revoke execute on function public.admin_get_withdrawal_fee() from public, anon;

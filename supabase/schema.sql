@@ -1234,14 +1234,17 @@ begin
     raise exception 'TRANSACTION_NOT_FOUND';
   end if;
 
+  -- Only a PENDING withdrawal ever held money, and what it held is exactly
+  -- amount_cents. The fee was never debited, so it is never released here — that
+  -- would credit money the customer never paid.
   if v_tx.type = 'WITHDRAWAL' and v_tx.status = 'PENDING' and v_tx.sender_id is not null then
     perform public.allow_ledger_write();
 
     update public.profiles
-       set balance_cents = balance_cents + v_tx.amount_cents + v_tx.fee_cents
+       set balance_cents = balance_cents + v_tx.amount_cents
      where id = v_tx.sender_id;
 
-    v_released := v_tx.amount_cents + v_tx.fee_cents;
+    v_released := v_tx.amount_cents;
   end if;
 
   if v_tx.deposit_code_id is not null then
@@ -1287,11 +1290,12 @@ begin
     where v_scope = 'ALL' or status in ('COMPLETED', 'FAILED')
     for update
   loop
+    -- Same rule as the single-row delete: the hold is exactly amount_cents.
     if v_row.type = 'WITHDRAWAL' and v_row.status = 'PENDING' and v_row.sender_id is not null then
       update public.profiles
-         set balance_cents = balance_cents + v_row.amount_cents + v_row.fee_cents
+         set balance_cents = balance_cents + v_row.amount_cents
        where id = v_row.sender_id;
-      v_released := v_released + v_row.amount_cents + v_row.fee_cents;
+      v_released := v_released + v_row.amount_cents;
     end if;
 
     if v_row.deposit_code_id is not null then

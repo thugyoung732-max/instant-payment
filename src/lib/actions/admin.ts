@@ -384,16 +384,22 @@ export async function resolveWithdrawalAction(input: {
 
   refreshConsole();
 
-  const refunded = Number((data as Record<string, unknown> | null)?.refundedCents ?? 0);
+  const payload = (data ?? {}) as Record<string, unknown>;
+  const refunded = Number(payload.refundedCents ?? 0);
+  const fee = Number(payload.feeCents ?? 0);
 
   return {
     ok: true,
     message:
       input.outcome === "COMPLETED"
-        ? "Withdrawal marked completed."
+        ? fee > 0
+          ? `Withdrawal marked completed. The ${formatUSD(fee)} fee is record-only and was not deducted.`
+          : "Withdrawal marked completed."
         : refunded > 0
-          ? "Withdrawal failed and the hold was released back to the balance."
-          : "Withdrawal failed.",
+          ? `Withdrawal declined — ${formatUSD(refunded)} refunded, the exact requested amount${
+              fee > 0 ? ` (the ${formatUSD(fee)} fee was never charged)` : ""
+            }.`
+          : "Withdrawal declined.",
   };
 }
 
@@ -402,8 +408,43 @@ export async function deleteTransactionAction(transactionId: string): Promise<Ad
 
   const gate = await requireAdminClient();
   if ("blocked" in gate) return gate.blocked;
+  const supabase = gate.supabase;
 
-  const { data, error } = await gate.supabase.rpc("admin_delete_transaction", {
+  /**
+   * A pending withdrawal is settled BEFORE the row is removed.
+   *
+   * The delete helper releases "amount + fee" on a pending withdrawal. With a
+   * fee now recorded on the row that would hand the customer money that was
+   * never taken from them. Resolving it as FAILED first refunds exactly the
+   * requested amount (through admin_resolve_withdrawal), and the row is then no
+   * longer PENDING, so the delete releases nothing further.
+   */
+  const { data: existing } = await supabase
+    .from("transactions")
+    .select("type, status, reference")
+    .eq("id", transactionId)
+    .maybeSingle();
+
+  let settledCents = 0;
+
+  if (existing?.type === "WITHDRAWAL" && existing.status === "PENDING") {
+    const { data: resolved, error: settleError } = await supabase.rpc("admin_resolve_withdrawal", {
+      p_transaction_id: transactionId,
+      p_outcome: "FAILED",
+      p_reason: "Released by admin when the ledger row was deleted",
+    });
+
+    if (settleError) {
+      const message = settleError.message ?? "";
+      if (!message.includes("WITHDRAWAL_ALREADY_RESOLVED")) {
+        return failure(settleError, "That withdrawal could not be released before deleting it.");
+      }
+    } else {
+      settledCents = Number((resolved as Record<string, unknown> | null)?.refundedCents ?? 0);
+    }
+  }
+
+  const { data, error } = await supabase.rpc("admin_delete_transaction", {
     p_transaction_id: transactionId,
   });
 
@@ -417,14 +458,15 @@ export async function deleteTransactionAction(transactionId: string): Promise<Ad
   refreshConsole();
 
   const payload = (data ?? {}) as Record<string, unknown>;
-  const released = Number(payload.releasedCents ?? 0);
+  const released = settledCents + Number(payload.releasedCents ?? 0);
+  const reference = String(payload.reference ?? existing?.reference ?? "Transaction");
 
   return {
     ok: true,
     message:
       released > 0
-        ? `${payload.reference ?? "Transaction"} deleted — ${formatUSD(released)} released back to the user.`
-        : `${payload.reference ?? "Transaction"} deleted from the ledger.`,
+        ? `${reference} deleted — ${formatUSD(released)} returned to the user (the requested amount; no fee was refunded).`
+        : `${reference} deleted from the ledger.`,
   };
 }
 
@@ -436,8 +478,38 @@ export async function clearTransactionsAction(input: {
 
   const gate = await requireAdminClient();
   if ("blocked" in gate) return gate.blocked;
+  const supabase = gate.supabase;
 
-  const { data, error } = await gate.supabase.rpc("admin_clear_transactions", {
+  /**
+   * Clearing everything removes pending withdrawals too, and the delete helper
+   * would release amount + fee for each of them. They are settled first — one
+   * `admin_resolve_withdrawal` per pending row, which refunds exactly the
+   * requested amount — so the subsequent clear only ever releases a hold that
+   * was placed correctly. A row that cannot be settled is left alone; the clear
+   * below then reports whatever it actually did.
+   */
+  let settledCents = 0;
+
+  if (parsed.data.scope === "ALL") {
+    const { data: pendingRows } = await supabase
+      .from("transactions")
+      .select("id")
+      .eq("type", "WITHDRAWAL")
+      .eq("status", "PENDING")
+      .limit(200);
+
+    for (const row of pendingRows ?? []) {
+      const { data: resolved, error: settleError } = await supabase.rpc("admin_resolve_withdrawal", {
+        p_transaction_id: String(row.id),
+        p_outcome: "FAILED",
+        p_reason: "Released by admin when the ledger was cleared",
+      });
+      if (settleError) continue;
+      settledCents += Number((resolved as Record<string, unknown> | null)?.refundedCents ?? 0);
+    }
+  }
+
+  const { data, error } = await supabase.rpc("admin_clear_transactions", {
     p_scope: parsed.data.scope,
   });
 
@@ -447,7 +519,7 @@ export async function clearTransactionsAction(input: {
 
   const payload = (data ?? {}) as Record<string, unknown>;
   const deleted = Number(payload.deletedCount ?? 0);
-  const released = Number(payload.releasedCents ?? 0);
+  const released = settledCents + Number(payload.releasedCents ?? 0);
   const freed = Number(payload.freedCodes ?? 0);
 
   if (deleted === 0) return { ok: true, message: "There was nothing to clear." };

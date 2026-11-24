@@ -465,10 +465,12 @@ export async function getWithdrawalFeeSettings(): Promise<WithdrawalFeeSettings 
     if (settings) return settings;
   }
 
+  // The canonical row is `id = 'default'` (the migration seeds it), so filter on
+  // it instead of taking "whichever row comes back first".
   const { data: row, error: tableError } = await supabase
     .from("withdrawal_fee_settings")
     .select("*")
-    .limit(1)
+    .eq("id", "default")
     .maybeSingle();
 
   if (tableError) return null;
@@ -491,7 +493,7 @@ export async function getPublicWithdrawalFee(): Promise<WithdrawalFeeSettings | 
   const { data, error } = await supabase
     .from("withdrawal_fee_settings")
     .select("*")
-    .limit(1)
+    .eq("id", "default")
     .maybeSingle();
 
   if (!error) {
