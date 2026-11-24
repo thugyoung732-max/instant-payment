@@ -286,26 +286,79 @@ const SCOPE_SENTENCE: Record<FeeApplyScope, string> = {
  * rewrites rows that are still PENDING, which is what keeps completed and
  * rejected withdrawals untouched no matter what `p_apply_to` says.
  */
+export async function getAccountWithdrawalFeeAction(userId: string) {
+  const gate = await requireAdminClient();
+  if ("blocked" in gate) return null;
+
+  const { data, error } = await gate.supabase.rpc(
+    "admin_get_account_withdrawal_fee",
+    { p_user_id: userId },
+  );
+
+  if (error || !data) return null;
+
+  const result = data as {
+    feeCents: number;
+    feeReason: string;
+    isCustom: boolean;
+    updatedAt: string | null;
+  };
+
+  return {
+    feeCents: Number(result.feeCents ?? 0),
+    feeReason: result.feeReason ?? "",
+    isCustom: Boolean(result.isCustom),
+    updatedAt: result.updatedAt ?? null,
+  };
+}
+
 export async function updateWithdrawalFeeAction(input: {
+  userId: string;
   feeCents: number;
   feeReason: string;
   applyTo: FeeApplyScope;
 }): Promise<AdminActionResult> {
+  if (!input.userId) {
+    return { ok: false, message: "Select an account first." };
+  }
+
   const parsed = withdrawalFeeSchema.safeParse({
     feeCents: Math.round(Number(input.feeCents)),
     feeReason: input.feeReason ?? "",
     applyTo: input.applyTo,
   });
-  if (!parsed.success) return { ok: false, message: firstIssue(parsed.error) };
+
+  if (!parsed.success) {
+    return { ok: false, message: firstIssue(parsed.error) };
+  }
 
   const gate = await requireAdminClient();
   if ("blocked" in gate) return gate.blocked;
 
-  const { data, error } = await gate.supabase.rpc("admin_update_withdrawal_fee", {
-    p_fee_cents: parsed.data.feeCents,
-    p_fee_reason: parsed.data.feeReason || null,
-    p_apply_to: parsed.data.applyTo,
-  });
+  const { data, error } = await gate.supabase.rpc(
+    "admin_update_account_withdrawal_fee",
+    {
+      p_user_id: input.userId,
+      p_fee_cents: parsed.data.feeCents,
+      p_fee_reason: parsed.data.feeReason || "",
+      p_apply_to: parsed.data.applyTo,
+    },
+  );
+
+  if (error) {
+    return failure(error, "The account withdrawal fee was not saved.");
+  }
+
+  refreshConsole();
+
+  const payload = (data ?? {}) as Record<string, unknown>;
+  const updated = Number(payload.updatedPending ?? 0);
+
+  return {
+    ok: true,
+    message: `Account fee saved. ${updated} pending withdrawal(s) updated.`,
+  };
+}
 
   if (error) {
     const message = error.message ?? "";
