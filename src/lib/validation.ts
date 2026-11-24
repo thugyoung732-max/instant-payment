@@ -229,6 +229,36 @@ export const withdrawalFeeSchema = z
     }
   });
 
+/**
+ * A flat fee for one specific account.
+ *
+ * Same rules as the global fee — a flat amount, never a percentage, $0.00 legal,
+ * a reason required whenever the amount is above zero — plus the account the
+ * override belongs to. Nothing here can reach another account: the id is passed
+ * straight through to `admin_update_account_withdrawal_fee`, which scopes every
+ * write to that single profile.
+ */
+export const accountWithdrawalFeeSchema = z
+  .object({
+    userId: z.string().trim().min(1, "Choose an account first."),
+    feeCents: withdrawalFeeAmountSchema,
+    feeReason: z
+      .string()
+      .trim()
+      .max(120, "Keep the fee reason under 120 characters.")
+      .default(""),
+    applyTo: z.enum(FEE_APPLY_SCOPES),
+  })
+  .superRefine((value, context) => {
+    if (value.feeCents > 0 && value.feeReason.trim().length < 3) {
+      context.addIssue({
+        code: "custom",
+        path: ["feeReason"],
+        message: "Add a short reason customers will see for this fee.",
+      });
+    }
+  });
+
 export function firstIssue(error: z.ZodError): string {
   return error.issues[0]?.message ?? "That input doesn't look right.";
 }

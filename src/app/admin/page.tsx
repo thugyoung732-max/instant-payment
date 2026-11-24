@@ -27,6 +27,8 @@ import { requireAdminProfile } from "@/lib/auth";
 import { chatIsLive } from "@/lib/chat";
 import { chatScriptUrl, type ChatProviderId } from "@/lib/chat-config";
 import {
+  getAccountWithdrawalFee,
+  getAdminAccount,
   getAdminOverview,
   getAdminTransactions,
   getAdminUsers,
@@ -35,6 +37,7 @@ import {
   getPendingWithdrawals,
   getTransactionCounts,
   getWithdrawalFeeSettings,
+  searchAdminAccounts,
   type AdminTransactionFilter,
   type AdminTransactionRow,
 } from "@/lib/data/queries";
@@ -156,7 +159,9 @@ export default async function AdminPage({
         {tab === "overview" ? <OverviewTab /> : null}
         {tab === "users" ? <UsersTab query={query} /> : null}
         {tab === "codes" ? <CodesTab /> : null}
-        {tab === "withdrawals" ? <WithdrawalsTab /> : null}
+        {tab === "withdrawals" ? (
+          <WithdrawalsTab query={query} accountId={single(params.account)} />
+        ) : null}
         {tab === "chat" ? <ChatTab /> : null}
         {tab === "ledger" ? <LedgerTab filter={ledgerFilter} query={query} /> : null}
       </main>
@@ -411,11 +416,20 @@ async function CodesTab() {
   );
 }
 
-const [pending, history, feeSettings] = await Promise.all([
-  getPendingWithdrawals(),
-  getAdminTransactions("withdrawals", 15),
-  getWithdrawalFeeSettings(),
-]);
+async function WithdrawalsTab({ query, accountId }: { query: string; accountId: string }) {
+  const [pending, history, feeSettings, accounts, selectedAccount] = await Promise.all([
+    getPendingWithdrawals(),
+    getAdminTransactions("withdrawals", 15),
+    getWithdrawalFeeSettings(),
+    searchAdminAccounts(query),
+    accountId ? getAdminAccount(accountId) : Promise.resolve(null),
+  ]);
+
+  // The effective fee is resolved by Postgres, not by the console: it answers
+  // with the account's override or the global default, whichever applies.
+  const accountFee = selectedAccount
+    ? await getAccountWithdrawalFee(selectedAccount.id)
+    : null;
 
   // Only the requested amount is held. The fee is informational, so it is never
   // added to the hold and never returned on a rejection.
@@ -434,7 +448,13 @@ const [pending, history, feeSettings] = await Promise.all([
         </p>
       </section>
 
-    <WithdrawalFeePanel users={users} />
+      <WithdrawalFeePanel
+        settings={feeSettings}
+        accounts={accounts}
+        query={query}
+        selectedAccount={selectedAccount}
+        accountFee={accountFee}
+      />
 
       <div className="overflow-hidden rounded-2xl border border-white/8 bg-[#0e1a16]">
         <div className="flex flex-wrap items-center gap-3 border-b border-white/8 px-5 py-3.5">

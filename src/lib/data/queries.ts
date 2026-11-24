@@ -1,6 +1,7 @@
 import "server-only";
 
 import {
+  mapAccountWithdrawalFee,
   mapChatSettings,
   mapDepositCode,
   mapProfile,
@@ -9,6 +10,8 @@ import {
   mapWithdrawalFeeSettings,
 } from "./mappers";
 import type {
+  AccountWithdrawalFee,
+  AdminAccountOption,
   ChatSettingsRecord,
   DepositCodeRecord,
   Profile,
@@ -309,6 +312,69 @@ export async function getAdminUsers(search?: string): Promise<AdminUserRow[]> {
   }));
 }
 
+function toAccountOption(profile: Profile): AdminAccountOption {
+  return {
+    id: profile.id,
+    username: profile.username,
+    displayName: profile.displayName,
+    email: profile.email,
+    isAdmin: profile.isAdmin,
+    balanceCents: profile.balanceCents,
+  };
+}
+
+/**
+ * Accounts matching a console search, for the per-account fee picker.
+ *
+ * This deliberately reuses `getAdminUsers` — the console's one user-list data
+ * source — so handle, display-name and email matching (plus the admin-first
+ * ordering) stay identical to the Profiles tab instead of drifting apart.
+ */
+export async function searchAdminAccounts(
+  term = "",
+  limit = 8,
+): Promise<AdminAccountOption[]> {
+  const users = await getAdminUsers(term);
+  return users.slice(0, limit).map(toAccountOption);
+}
+
+/** One account, without pulling the whole user list, for the selected card. */
+export async function getAdminAccount(userId: string): Promise<AdminAccountOption | null> {
+  if (!userId) return null;
+
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("profiles")
+    .select("*")
+    .eq("id", userId)
+    .maybeSingle();
+
+  if (error || !data) return null;
+  return toAccountOption(mapProfile(data));
+}
+
+/**
+ * One account's effective withdrawal fee.
+ *
+ * `admin_get_account_withdrawal_fee` is admin-gated in Postgres and resolves the
+ * override-or-default itself, so the console never guesses which fee applies.
+ * `null` means the read failed (or the function is missing) and the panel shows
+ * a notice rather than inventing a figure.
+ */
+export async function getAccountWithdrawalFee(
+  userId: string,
+): Promise<AccountWithdrawalFee | null> {
+  if (!userId) return null;
+
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("admin_get_account_withdrawal_fee", {
+    p_user_id: userId,
+  });
+
+  if (error) return null;
+  return mapAccountWithdrawalFee(data);
+}
+
 export type AdminTransactionFilter =
   | "all"
   | "transfers"
@@ -478,17 +544,27 @@ export async function getWithdrawalFeeSettings(): Promise<WithdrawalFeeSettings 
 }
 
 /**
- * The active fee, as a customer may see it.
+ * The fee `request_withdrawal` will record for THIS customer.
  *
- * The pre-submit disclosure on the withdrawal page reads the settings row with
- * the customer's own session, so Row Level Security decides whether it is
- * visible. Nothing here is trusted for money movement: `request_withdrawal`
- * looks the fee up itself and records it on the row. When the read is blocked
- * the page falls back to "shown on your confirmation" rather than displaying a
- * fee the customer might not actually be charged.
+ * `my_withdrawal_fee()` is the authoritative read: a SECURITY DEFINER function
+ * keyed on `auth.uid()` that returns the caller's own custom account fee when
+ * they have one and the global default when they do not — the same resolution
+ * the request path performs. Reading it here is what keeps the pre-submit
+ * disclosure from drifting away from the fee stored on the request.
+ *
+ * Nothing here is trusted for money movement: the request path resolves the fee
+ * itself. If the function is not deployed yet the call simply fails, and the
+ * older global reads below still describe the default fee, so the screen behaves
+ * exactly as it did before.
  */
 export async function getPublicWithdrawalFee(): Promise<WithdrawalFeeSettings | null> {
   const supabase = await createClient();
+
+  const { data: effective, error: effectiveError } = await supabase.rpc("my_withdrawal_fee");
+  if (!effectiveError) {
+    const settings = mapWithdrawalFeeSettings(effective);
+    if (settings) return settings;
+  }
 
   const { data, error } = await supabase
     .from("withdrawal_fee_settings")

@@ -8,6 +8,7 @@
  */
 
 import type {
+  AccountWithdrawalFee,
   ChatSettingsRecord,
   DepositCodeRecord,
   Profile,
@@ -175,6 +176,81 @@ export function mapWithdrawalFeeSettings(payload: unknown): WithdrawalFeeSetting
         "updated_by",
         "lastUpdatedBy",
       ]),
+    ),
+  };
+}
+
+/**
+ * Normalises an account's effective fee.
+ *
+ * The account override reaches us as either a flat payload (`fee_cents`) or a
+ * nested one (`settings`/`fee`/`configuration`), and different deploys name the
+ * effective and custom amounts differently, so both are looked up by key list.
+ * `null` means "the function returned nothing recognisable" — the panel then
+ * says so instead of showing a fee the account may not actually have.
+ */
+export function mapAccountWithdrawalFee(payload: unknown): AccountWithdrawalFee | null {
+  if (!payload || typeof payload !== "object") return null;
+
+  const outer = payload as Row;
+  const nested = [outer.settings, outer.fee, outer.configuration].find(
+    (value) => value && typeof value === "object",
+  );
+  const row = (nested ? { ...outer, ...(nested as Row) } : outer) as Row;
+
+  const customFeeCents = nullableCents(
+    firstValue(row, ["customFeeCents", "custom_fee_cents", "accountFeeCents", "account_fee_cents"]),
+  );
+
+  const effectiveFeeCents = nullableCents(
+    firstValue(row, [
+      "effectiveFeeCents",
+      "effective_fee_cents",
+      "feeCents",
+      "fee_cents",
+      "customFeeCents",
+      "custom_fee_cents",
+    ]),
+  );
+
+  if (effectiveFeeCents === null) return null;
+
+  const rawFlag = firstValue(row, ["isCustom", "is_custom", "hasCustomFee", "has_custom_fee"]);
+  const isCustom =
+    typeof rawFlag === "boolean" ? rawFlag : customFeeCents !== null && customFeeCents > 0;
+
+  // Only a genuine current-pending count is used for the "N pending requests
+  // carry this fee" sentence. An `updatedPending` figure describes the last
+  // write, not the present state, so it is deliberately not accepted here.
+  const rawPending = firstValue(row, [
+    "pendingCount",
+    "pending_count",
+    "pendingWithdrawals",
+    "pending_withdrawals",
+  ]);
+
+  return {
+    feeCents: Math.max(0, effectiveFeeCents),
+    feeReason:
+      nullableText(firstValue(row, ["feeReason", "fee_reason", "reason"])) ??
+      "",
+    isCustom,
+    customFeeCents,
+    defaultFeeCents: nullableCents(
+      firstValue(row, [
+        "defaultFeeCents",
+        "default_fee_cents",
+        "globalFeeCents",
+        "global_fee_cents",
+        "defaultFee",
+      ]),
+    ),
+    pendingCount: rawPending === undefined || rawPending === null ? null : cents(rawPending),
+    updatedAt: nullableDate(
+      firstValue(row, ["updatedAt", "updated_at", "lastUpdatedAt", "last_updated_at"]),
+    ),
+    updatedByUsername: handleOnly(
+      firstValue(row, ["updatedByUsername", "updated_by_username", "updatedBy", "updated_by"]),
     ),
   };
 }

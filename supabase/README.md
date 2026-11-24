@@ -63,6 +63,21 @@ screen can disclose it before a request is submitted. There is no write policy
 on the table: only `admin_update_withdrawal_fee()` writes it, and that function
 requires `profiles.is_admin`.
 
+### Per-account fees and the customer disclosure
+
+Accounts may carry their own flat fee in `public.withdrawal_account_fees`
+(`user_id` primary key, `fee_cents`, `fee_reason`, `updated_by`, `updated_at`),
+written only by `admin_update_account_withdrawal_fee()`. The global settings row
+remains the fallback for accounts without an override.
+
+[`migrations/20261124120000_customer_withdrawal_fee.sql`](./migrations/20261124120000_customer_withdrawal_fee.sql)
+adds `my_withdrawal_fee()`: a `security definer` function with no arguments that
+resolves the **calling** account (via `auth.uid()`) to its custom fee, falling
+back to `withdrawal_fee_settings` (`id = 'default'`). The withdrawal screen reads
+it, so the pre-submit disclosure shows exactly the fee `request_withdrawal()`
+will record. It is read-only — it never moves a balance and never changes a
+request.
+
 ## 2. Create the demo roster (optional)
 
 Run [`seed.sql`](./seed.sql) once. It creates `@ada` (administrator) and the

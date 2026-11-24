@@ -9,6 +9,7 @@ import type { AdminActionResult } from "@/lib/data/types";
 import { supabaseConfigured, supabaseUrl } from "@/lib/supabase/env";
 import { createClient } from "@/lib/supabase/server";
 import {
+  accountWithdrawalFeeSchema,
   adminCodeSchema,
   adminCreditSchema,
   clearTransactionsSchema,
@@ -286,79 +287,26 @@ const SCOPE_SENTENCE: Record<FeeApplyScope, string> = {
  * rewrites rows that are still PENDING, which is what keeps completed and
  * rejected withdrawals untouched no matter what `p_apply_to` says.
  */
-export async function getAccountWithdrawalFeeAction(userId: string) {
-  const gate = await requireAdminClient();
-  if ("blocked" in gate) return null;
-
-  const { data, error } = await gate.supabase.rpc(
-    "admin_get_account_withdrawal_fee",
-    { p_user_id: userId },
-  );
-
-  if (error || !data) return null;
-
-  const result = data as {
-    feeCents: number;
-    feeReason: string;
-    isCustom: boolean;
-    updatedAt: string | null;
-  };
-
-  return {
-    feeCents: Number(result.feeCents ?? 0),
-    feeReason: result.feeReason ?? "",
-    isCustom: Boolean(result.isCustom),
-    updatedAt: result.updatedAt ?? null,
-  };
-}
-
 export async function updateWithdrawalFeeAction(input: {
-  userId: string;
   feeCents: number;
   feeReason: string;
   applyTo: FeeApplyScope;
 }): Promise<AdminActionResult> {
-  if (!input.userId) {
-    return { ok: false, message: "Select an account first." };
-  }
-
   const parsed = withdrawalFeeSchema.safeParse({
     feeCents: Math.round(Number(input.feeCents)),
     feeReason: input.feeReason ?? "",
     applyTo: input.applyTo,
   });
-
-  if (!parsed.success) {
-    return { ok: false, message: firstIssue(parsed.error) };
-  }
+  if (!parsed.success) return { ok: false, message: firstIssue(parsed.error) };
 
   const gate = await requireAdminClient();
   if ("blocked" in gate) return gate.blocked;
 
-  const { data, error } = await gate.supabase.rpc(
-    "admin_update_account_withdrawal_fee",
-    {
-      p_user_id: input.userId,
-      p_fee_cents: parsed.data.feeCents,
-      p_fee_reason: parsed.data.feeReason || "",
-      p_apply_to: parsed.data.applyTo,
-    },
-  );
-
-  if (error) {
-    return failure(error, "The account withdrawal fee was not saved.");
-  }
-
-  refreshConsole();
-
-  const payload = (data ?? {}) as Record<string, unknown>;
-  const updated = Number(payload.updatedPending ?? 0);
-
-  return {
-    ok: true,
-    message: `Account fee saved. ${updated} pending withdrawal(s) updated.`,
-  };
-}
+  const { data, error } = await gate.supabase.rpc("admin_update_withdrawal_fee", {
+    p_fee_cents: parsed.data.feeCents,
+    p_fee_reason: parsed.data.feeReason || null,
+    p_apply_to: parsed.data.applyTo,
+  });
 
   if (error) {
     const message = error.message ?? "";
@@ -404,6 +352,106 @@ export async function updateWithdrawalFeeAction(input: {
   return {
     ok: true,
     message: `Withdrawal fee set to ${amount}${reason} for ${SCOPE_SENTENCE[parsed.data.applyTo]}.${applied}`,
+  };
+}
+
+/**
+ * Saves a flat withdrawal fee for ONE account, leaving everyone else alone.
+ *
+ * `admin_update_account_withdrawal_fee` owns every rule that matters, because a
+ * fee is money-adjacent and must not depend on the browser:
+ *
+ * - the override replaces that account's previous override and is scoped to
+ *   `p_user_id`, so no other account's fee can move;
+ * - FUTURE writes the override for requests created from now on, PENDING
+ *   rewrites only rows that are still PENDING, BOTH does both — a COMPLETED or
+ *   FAILED withdrawal is never touched by any scope;
+ * - `request_withdrawal` re-reads the fee server-side when a request is created,
+ *   and falls back to the global default when the account has no override.
+ *
+ * The fee stays informational: no wallet is debited for it here or anywhere
+ * else, and refunds remain the requested amount only.
+ */
+export async function updateAccountWithdrawalFeeAction(input: {
+  userId: string;
+  feeCents: number;
+  feeReason: string;
+  applyTo: FeeApplyScope;
+}): Promise<AdminActionResult> {
+  const parsed = accountWithdrawalFeeSchema.safeParse({
+    userId: input.userId ?? "",
+    feeCents: Math.round(Number(input.feeCents)),
+    feeReason: input.feeReason ?? "",
+    applyTo: input.applyTo,
+  });
+  if (!parsed.success) return { ok: false, message: firstIssue(parsed.error) };
+
+  const gate = await requireAdminClient();
+  if ("blocked" in gate) return gate.blocked;
+
+  const { data, error } = await gate.supabase.rpc("admin_update_account_withdrawal_fee", {
+    p_user_id: parsed.data.userId,
+    p_fee_cents: parsed.data.feeCents,
+    p_fee_reason: parsed.data.feeReason || null,
+    p_apply_to: parsed.data.applyTo,
+  });
+
+  if (error) {
+    const message = error.message ?? "";
+    if (message.includes("ACCOUNT_NOT_FOUND") || message.includes("USER_NOT_FOUND")) {
+      return { ok: false, message: "That account no longer exists. Search for it again." };
+    }
+    if (message.includes("INVALID_FEE") || message.includes("INVALID_FEE_AMOUNT")) {
+      return {
+        ok: false,
+        message: "That fee amount is not accepted. Use a flat amount of $0 or more.",
+      };
+    }
+    if (message.includes("INVALID_APPLY_TO") || message.includes("INVALID_SCOPE")) {
+      return { ok: false, message: "Choose Future, Pending or Both, then save again." };
+    }
+    if (message.includes("INVALID_FEE_REASON")) {
+      return { ok: false, message: "Add a short reason customers will see for this fee." };
+    }
+    return failure(error, "That account's withdrawal fee was not saved.");
+  }
+
+  refreshConsole();
+
+  const payload = (data ?? {}) as Record<string, unknown>;
+  const updated = payloadCount(payload, [
+    "updatedPending",
+    "updated_pending",
+    "pendingUpdated",
+    "pending_updated",
+    "updatedCount",
+    "updated_count",
+    "pendingCount",
+  ]);
+
+  const rawHandle = payload.username ?? payload.handle;
+  const who =
+    typeof rawHandle === "string" && rawHandle.trim()
+      ? `@${rawHandle.trim().replace(/^@+/, "")}`
+      : "that account";
+
+  const amount = formatUSD(parsed.data.feeCents);
+  const reason = parsed.data.feeReason ? ` — “${parsed.data.feeReason}”` : "";
+
+  const applied =
+    parsed.data.applyTo === "FUTURE"
+      ? ""
+      : updated === null
+        ? parsed.data.applyTo === "PENDING"
+          ? " Pending requests were updated."
+          : " Pending requests were updated too."
+        : ` ${updated} pending request${updated === 1 ? "" : "s"} updated${
+            parsed.data.applyTo === "PENDING" ? "" : " as well"
+          }.`;
+
+  return {
+    ok: true,
+    message: `Fee for ${who} set to ${amount}${reason} for ${SCOPE_SENTENCE[parsed.data.applyTo]}.${applied} No other account was changed.`,
   };
 }
 
