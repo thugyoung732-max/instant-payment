@@ -2,7 +2,12 @@
 
 import { revalidatePath } from "next/cache";
 
-import { findDestination } from "@/lib/destinations";
+import {
+  buildBankDestinationLabel,
+  findWallet,
+  resolveBank,
+  validateBankDetails,
+} from "@/lib/destinations";
 import { supabaseConfigured } from "@/lib/supabase/env";
 import { createClient } from "@/lib/supabase/server";
 import {
@@ -239,9 +244,12 @@ export type WithdrawalResult =
 
 export async function withdrawAction(input: {
   amountCents: number;
-  destinationId: string;
   accountName: string;
-  identifier: string;
+  /** Wallet destination id, when the customer is paid to a wallet. */
+  destinationId?: string;
+  identifier?: string;
+  /** International bank selection, when the customer is paid to a bank. */
+  bank?: { countryCode: string; bankId: string; details: Record<string, string> };
 }): Promise<WithdrawalResult> {
   if (!supabaseConfigured()) {
     return { ok: false, code: "UNAUTHENTICATED", message: NOT_CONFIGURED };
@@ -249,17 +257,47 @@ export async function withdrawAction(input: {
 
   const parsed = withdrawalSchema.safeParse({
     amountCents: Math.round(Number(input.amountCents)),
-    destinationId: input.destinationId ?? "",
     accountName: input.accountName ?? "",
-    identifier: input.identifier ?? "",
+    destinationId: input.destinationId,
+    identifier: input.identifier,
+    bank: input.bank,
   });
   if (!parsed.success) {
     return { ok: false, code: "INVALID_DESTINATION", message: firstIssue(parsed.error) };
   }
 
-  const destination = findDestination(parsed.data.destinationId);
-  if (!destination) {
-    return { ok: false, code: "INVALID_DESTINATION", message: "Choose a destination." };
+  // Exactly one destination shape reaches this point, thanks to the schema.
+  // The label is what `request_withdrawal` stores on the ledger row, so it is
+  // built here: bank, country, masked routing details and the holder. A full
+  // account or routing number never reaches the transaction description.
+  let label: string;
+
+  if (parsed.data.bank) {
+    const resolved = resolveBank(parsed.data.bank.countryCode, parsed.data.bank.bankId);
+    if (!resolved) {
+      return { ok: false, code: "INVALID_DESTINATION", message: "Choose a bank from the directory." };
+    }
+
+    const checked = validateBankDetails(resolved.country, parsed.data.bank.details);
+    if (!checked.ok) {
+      return { ok: false, code: "INVALID_DESTINATION", message: checked.message };
+    }
+
+    label = buildBankDestinationLabel({
+      bank: resolved.bank,
+      country: resolved.country,
+      accountName: parsed.data.accountName,
+      values: checked.values,
+    });
+  } else {
+    const destination = findWallet(parsed.data.destinationId ?? "");
+    if (!destination || !parsed.data.identifier) {
+      return { ok: false, code: "INVALID_DESTINATION", message: "Choose a destination." };
+    }
+
+    // A wallet handle is an address, not an account number, so it is stored as
+    // entered: it is the only thing that lets the payout be sent.
+    label = `${destination.label} · ${parsed.data.identifier} · ${parsed.data.accountName}`;
   }
 
   const supabase = await createClient();
@@ -267,8 +305,6 @@ export async function withdrawAction(input: {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return { ok: false, code: "UNAUTHENTICATED", message: UNAUTHENTICATED };
-
-  const label = `${destination.label} · ${parsed.data.identifier} · ${parsed.data.accountName}`;
 
   const { data, error } = await supabase.rpc("request_withdrawal", {
     p_amount_cents: parsed.data.amountCents,

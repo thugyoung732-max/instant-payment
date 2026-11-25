@@ -2,13 +2,22 @@
 import React from 'react';
 
 import { AnimatePresence, motion } from "framer-motion";
-import { CircleAlert, Clock, Landmark, Loader2, ShieldCheck } from "lucide-react";
+import { Check, CircleAlert, Clock, Landmark, Loader2, Search, ShieldCheck } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
 import { AnimatedAmount } from "@/components/fairmoney/animated-amount";
 import { Magnetic } from "@/components/fairmoney/magnetic";
-import { DESTINATION_GROUPS, WITHDRAWAL_DESTINATIONS, findDestination } from "@/lib/destinations";
+import {
+  COUNTRIES,
+  COUNTRY_REGIONS,
+  WALLET_DESTINATIONS,
+  checkBankField,
+  findBank,
+  findCountry,
+  findWallet,
+  searchBanks,
+} from "@/lib/destinations";
 import type { WithdrawalFeeSettings } from "@/lib/data/types";
 import { formatUSD, parseAmountToCents } from "@/lib/money";
 import { withdrawAction } from "@/lib/actions/wallet";
@@ -24,12 +33,21 @@ type Submitted = {
   createdAt: string;
 };
 
+type Mode = "bank" | "wallet";
+
 // The withdrawal fee is informational only. A $10,000 request with a $500 fee
 // debits exactly $10,000 — never $10,500, and the request is never reduced to
 // $9,500. The fee is recorded against the request for the customer's records.
 
 const fieldClass =
   "mt-3.5 w-full rounded-[18px] border border-border bg-secondary/40 px-4 py-3.5 text-[16px] text-foreground outline-none transition-colors placeholder:text-muted-foreground/40 focus:border-primary/45 focus:bg-card";
+
+const modeButtonClass = (active: boolean) =>
+  `rounded-[14px] px-3 py-2.5 font-display text-[13px] font-semibold transition-colors ${
+    active
+      ? "bg-card text-foreground shadow-[0_10px_24px_-20px_rgba(7,24,20,0.9)]"
+      : "text-muted-foreground hover:text-foreground"
+  }`;
 
 export function WithdrawForm({
   balanceCents,
@@ -39,14 +57,30 @@ export function WithdrawForm({
   fee?: WithdrawalFeeSettings | null;
 }) {
   const [amount, setAmount] = useState("");
-  const [destinationId, setDestinationId] = useState<string>(WITHDRAWAL_DESTINATIONS[0].id);
+  const [mode, setMode] = useState<Mode>("bank");
   const [accountName, setAccountName] = useState("");
+
+  // Bank directory state. No bank is preselected: the customer has to pick one
+  // from their country's list so a payout can never default to the wrong bank.
+  const [countryCode, setCountryCode] = useState<string>("US");
+  const [bankQuery, setBankQuery] = useState("");
+  const [bankId, setBankId] = useState("");
+  const [details, setDetails] = useState<Record<string, string>>({});
+
+  // Wallet state.
+  const [walletId, setWalletId] = useState<string>(WALLET_DESTINATIONS[0].id);
   const [identifier, setIdentifier] = useState("");
+
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submitted, setSubmitted] = useState<Submitted | null>(null);
 
-  const destination = findDestination(destinationId) ?? WITHDRAWAL_DESTINATIONS[0];
+  const country = findCountry(countryCode) ?? COUNTRIES[0];
+  const bank = bankId ? findBank(bankId) : undefined;
+  const selectedBank = bank && bank.countryCode === country.code ? bank : undefined;
+  const bankMatches = searchBanks(country.code, bankQuery);
+  const wallet = findWallet(walletId) ?? WALLET_DESTINATIONS[0];
+
   const amountCents = parseAmountToCents(amount);
 
   // Read from the stored settings row on the server. Nothing here is submitted:
@@ -60,26 +94,57 @@ export function WithdrawForm({
   // beside it and never added to (or subtracted from) the wallet movement.
   const totalCents = amountCents ?? 0;
   const overdraft = amountCents !== null && amountCents > balanceCents;
+
+  const detailsComplete = country.fields.every(
+    (spec) => checkBankField(spec, details[spec.key] ?? "") === null,
+  );
+  const bankReady = Boolean(selectedBank) && detailsComplete;
+  const destinationReady =
+    mode === "bank" ? bankReady : identifier.trim().length >= 3;
+
   const canSubmit =
     Boolean(amountCents) &&
     !overdraft &&
     accountName.trim().length >= 2 &&
-    identifier.trim().length >= 3 &&
+    destinationReady &&
     !busy;
+
+  function chooseCountry(next: string) {
+    setCountryCode(next);
+    setBankId("");
+    setBankQuery("");
+    setDetails({});
+  }
 
   async function submit() {
     if (!canSubmit || !amountCents) return;
     setBusy(true);
     setError(null);
 
-    const result = await withdrawAction({
-      amountCents,
-      destinationId,
-      accountName,
-      identifier,
-    });
+    const holder = accountName.trim();
+
+    const result =
+      mode === "bank"
+        ? selectedBank
+          ? await withdrawAction({
+              amountCents,
+              accountName: holder,
+              bank: { countryCode: country.code, bankId: selectedBank.id, details },
+            })
+          : null
+        : await withdrawAction({
+            amountCents,
+            accountName: holder,
+            destinationId: wallet.id,
+            identifier,
+          });
 
     setBusy(false);
+
+    if (!result) {
+      setError("Choose a bank from the directory.");
+      return;
+    }
 
     if (!result.ok) {
       setError(result.message);
@@ -141,8 +206,10 @@ export function WithdrawForm({
               <dd className="fm-numeric font-mono text-white/85">{submitted.reference}</dd>
             </div>
             <div className="flex items-start justify-between gap-4">
-              <dt>Destination</dt>
-              <dd className="max-w-[62%] text-right text-white/85">{submitted.destination}</dd>
+              <dt className="shrink-0">Destination</dt>
+              <dd className="max-w-[64%] break-words text-right text-white/85">
+                {submitted.destination}
+              </dd>
             </div>
             <div className="flex items-start justify-between gap-4">
               <dt>Withdrawal fee</dt>
@@ -193,6 +260,7 @@ export function WithdrawForm({
             setAmount("");
             setAccountName("");
             setIdentifier("");
+            setDetails({});
           }}
           className="fm-btn fm-btn-ghost w-full"
         >
@@ -306,52 +374,251 @@ export function WithdrawForm({
       </section>
 
       <section className="fm-card px-6 py-6">
-        <label htmlFor="withdraw-destination" className="fm-label">
-          Withdraw to
-        </label>
-        <select
-          id="withdraw-destination"
-          value={destinationId}
-          onChange={(event) => setDestinationId(event.target.value)}
-          className={`fm-field ${fieldClass.replace("mt-3.5 ", "")}`}
+        <p className="fm-label">Withdraw to</p>
+
+        <div
+          role="tablist"
+          aria-label="Destination type"
+          className="mt-3.5 grid grid-cols-2 gap-1 rounded-[18px] border border-border bg-secondary/50 p-1.5"
         >
-          {DESTINATION_GROUPS.map((group) => (
-            <optgroup key={group} label={group}>
-              {WITHDRAWAL_DESTINATIONS.filter((item) => item.group === group).map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.label}
-                </option>
-              ))}
-            </optgroup>
-          ))}
-        </select>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === "bank"}
+            onClick={() => setMode("bank")}
+            className={modeButtonClass(mode === "bank")}
+          >
+            Bank account
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === "wallet"}
+            onClick={() => setMode("wallet")}
+            className={modeButtonClass(mode === "wallet")}
+          >
+            Wallet or app
+          </button>
+        </div>
 
-        <label htmlFor="account-name" className="fm-label mt-6 block">
-          Name on account
-        </label>
-        <input
-          id="account-name"
-          value={accountName}
-          onChange={(event) => setAccountName(event.target.value.slice(0, 60))}
-          placeholder="Full name on the account"
-          className={fieldClass}
-        />
+        <AnimatePresence initial={false} mode="wait">
+          {mode === "bank" ? (
+            <motion.div
+              key="bank"
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.18 }}
+            >
+              <label htmlFor="withdraw-country" className="fm-label mt-6 block">
+                Country
+              </label>
+              <select
+                id="withdraw-country"
+                value={country.code}
+                onChange={(event) => chooseCountry(event.target.value)}
+                className={fieldClass}
+              >
+                {COUNTRY_REGIONS.map((region) => (
+                  <optgroup key={region} label={region}>
+                    {COUNTRIES.filter((item) => item.region === region).map((item) => (
+                      <option key={item.code} value={item.code}>
+                        {item.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
+              <p className="mt-3 text-[12.5px] leading-relaxed text-muted-foreground">
+                Pick the country where the account is held. The banking details we ask for change
+                with the country.
+              </p>
 
-        <label htmlFor="identifier" className="fm-label mt-6 block">
-          {destination.identifierLabel}
-        </label>
-        <input
-          id="identifier"
-          value={identifier}
-          onChange={(event) => setIdentifier(event.target.value.slice(0, 64))}
-          placeholder={destination.identifierPlaceholder}
-          className={`${fieldClass} ${destination.needsAccountNumber ? "fm-numeric" : ""}`}
-        />
-        <p className="mt-3 text-[12.5px] text-muted-foreground">
-          {destination.needsAccountNumber
-            ? "Only the last 4 digits of the account number are stored with the request."
-            : "We only store a masked version of the details you enter."}
-        </p>
+              <label htmlFor="bank-search" className="fm-label mt-6 block">
+                Bank
+              </label>
+              <div className="mt-3.5 flex items-center gap-2.5 rounded-[18px] border border-border bg-secondary/40 px-4 py-3 transition-colors focus-within:border-primary/45 focus-within:bg-card">
+                <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
+                <input
+                  id="bank-search"
+                  type="search"
+                  value={bankQuery}
+                  onChange={(event) => setBankQuery(event.target.value)}
+                  placeholder={`Search ${country.name} banks`}
+                  autoComplete="off"
+                  spellCheck={false}
+                  className="min-w-0 flex-1 bg-transparent text-[15px] text-foreground outline-none placeholder:text-muted-foreground/50"
+                />
+              </div>
+
+              <div
+                role="listbox"
+                aria-label={`${country.name} bank directory`}
+                className="mt-3 max-h-[260px] overflow-y-auto rounded-[18px] border border-border bg-secondary/25 p-1.5"
+              >
+                {bankMatches.length ? (
+                  bankMatches.map((item) => {
+                    const active = item.id === selectedBank?.id;
+                    return (
+                      <button
+                        key={item.id}
+                        type="button"
+                        role="option"
+                        aria-selected={active}
+                        onClick={() => setBankId(item.id)}
+                        className={`flex w-full items-center justify-between gap-3 rounded-[14px] px-3.5 py-3 text-left transition-colors ${
+                          active
+                            ? "bg-card text-foreground"
+                            : "text-muted-foreground hover:bg-card/60 hover:text-foreground"
+                        }`}
+                      >
+                        <span className="min-w-0">
+                          <span className="block truncate text-[14px] font-medium">{item.name}</span>
+                          <span className="mt-0.5 block font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground/70">
+                            {country.name}
+                            {item.generic ? " · not listed" : ""}
+                          </span>
+                        </span>
+                        {active ? <Check className="h-4 w-4 shrink-0 text-primary" /> : null}
+                      </button>
+                    );
+                  })
+                ) : (
+                  <p className="px-3.5 py-4 text-[12.5px] leading-relaxed text-muted-foreground">
+                    No bank matches “{bankQuery.trim()}”. Try a shorter search, or choose “Other{" "}
+                    {country.shortName} bank” after clearing it.
+                  </p>
+                )}
+              </div>
+
+              {selectedBank ? (
+                <p className="mt-3 text-[12.5px] text-muted-foreground">
+                  Sending to{" "}
+                  <span className="font-semibold text-foreground">{selectedBank.name}</span> ·{" "}
+                  {country.name}
+                </p>
+              ) : (
+                <p className="mt-3 text-[12.5px] text-muted-foreground">
+                  Choose the bank that holds the account.
+                </p>
+              )}
+
+              <label htmlFor="account-name" className="fm-label mt-6 block">
+                Name on account
+              </label>
+              <input
+                id="account-name"
+                value={accountName}
+                onChange={(event) => setAccountName(event.target.value.slice(0, 60))}
+                placeholder="Full name on the account"
+                autoComplete="name"
+                className={fieldClass}
+              />
+              <p className="mt-3 text-[12.5px] text-muted-foreground">
+                Required. It must match the name the bank has on file.
+              </p>
+
+              {country.fields.map((spec) => {
+                const raw = details[spec.key] ?? "";
+                // Only complain once something has been typed: an empty field
+                // shows its hint instead of an error.
+                const issue = raw.trim() ? checkBankField(spec, raw) : null;
+                return (
+                  <div key={spec.key}>
+                    <label htmlFor={`bank-${spec.key}`} className="fm-label mt-6 block">
+                      {spec.label}
+                    </label>
+                    <input
+                      id={`bank-${spec.key}`}
+                      value={raw}
+                      onChange={(event) =>
+                        setDetails((previous) => ({
+                          ...previous,
+                          [spec.key]: event.target.value.slice(0, spec.maxLength + 4),
+                        }))
+                      }
+                      placeholder={spec.placeholder}
+                      inputMode={spec.inputMode}
+                      autoComplete="off"
+                      spellCheck={false}
+                      className={`${fieldClass} ${spec.inputMode === "numeric" ? "fm-numeric" : ""}`}
+                    />
+                    {issue ? (
+                      <p className="mt-2 flex items-center gap-2 text-[12px] text-destructive">
+                        <CircleAlert className="h-3.5 w-3.5 shrink-0" />
+                        {issue}
+                      </p>
+                    ) : spec.hint ? (
+                      <p className="mt-2 text-[12.5px] leading-relaxed text-muted-foreground">
+                        {spec.hint}
+                      </p>
+                    ) : null}
+                  </div>
+                );
+              })}
+
+              <p className="mt-4 text-[12.5px] leading-relaxed text-muted-foreground">
+                Only masked banking details are stored with the request — the last few characters of
+                the account and routing numbers. We never keep the full numbers on the transaction.
+              </p>
+            </motion.div>
+          ) : (
+            <motion.div
+              key="wallet"
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.18 }}
+            >
+              <label htmlFor="withdraw-wallet" className="fm-label mt-6 block">
+                Wallet or app
+              </label>
+              <select
+                id="withdraw-wallet"
+                value={wallet.id}
+                onChange={(event) => setWalletId(event.target.value)}
+                className={fieldClass}
+              >
+                {WALLET_DESTINATIONS.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.label}
+                  </option>
+                ))}
+              </select>
+
+              <label htmlFor="account-name" className="fm-label mt-6 block">
+                Name on account
+              </label>
+              <input
+                id="account-name"
+                value={accountName}
+                onChange={(event) => setAccountName(event.target.value.slice(0, 60))}
+                placeholder="Full name on the account"
+                autoComplete="name"
+                className={fieldClass}
+              />
+              <p className="mt-3 text-[12.5px] text-muted-foreground">
+                Required. It must match the name on the wallet.
+              </p>
+
+              <label htmlFor="identifier" className="fm-label mt-6 block">
+                {wallet.identifierLabel}
+              </label>
+              <input
+                id="identifier"
+                value={identifier}
+                onChange={(event) => setIdentifier(event.target.value.slice(0, 64))}
+                placeholder={wallet.identifierPlaceholder}
+                autoComplete="off"
+                spellCheck={false}
+                className={fieldClass}
+              />
+              <p className="mt-3 text-[12.5px] text-muted-foreground">
+                This handle is stored with the request so the payout can be addressed.
+              </p>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </section>
 
       <AnimatePresence>

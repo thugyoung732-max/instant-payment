@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { DESTINATION_IDS } from "@/lib/destinations";
+import { findWallet, resolveBank, validateBankDetails } from "@/lib/destinations";
 import { MAX_AMOUNT_CENTS } from "@/lib/money";
 
 export const USERNAME_PATTERN = /^[a-z0-9_]{3,20}$/;
@@ -138,22 +138,62 @@ export const depositSchema = z.object({
   amountCents: z.number().int().positive().optional(),
 });
 
-export const withdrawalSchema = z.object({
-  amountCents: amountCentsSchema,
-  destinationId: z
-    .string()
-    .refine((value) => DESTINATION_IDS.includes(value), { message: "Choose a destination." }),
-  accountName: z
-    .string()
-    .trim()
-    .min(2, "Enter the name on the account.")
-    .max(60, "Keep the name under 60 characters."),
-  identifier: z
-    .string()
-    .trim()
-    .min(3, "Enter the destination details.")
-    .max(64, "Keep the destination details under 64 characters."),
+/**
+ * The bank half of a withdrawal: which country, which bank from that country's
+ * directory, and the routing fields that country asks for.
+ */
+export const withdrawalBankSchema = z.object({
+  countryCode: z.string().trim().min(2, "Choose a country.").max(3),
+  bankId: z.string().trim().min(2, "Choose a bank.").max(64),
+  details: z.record(z.string(), z.string().trim().max(64)),
 });
+
+/**
+ * A withdrawal goes either to a wallet or to a bank account — never both and
+ * never neither. The account holder name is required in both cases, and the
+ * bank fields are validated against the selected country's own rules here, on
+ * the server, so a crafted request cannot skip them.
+ */
+export const withdrawalSchema = z
+  .object({
+    amountCents: amountCentsSchema,
+    accountName: z
+      .string()
+      .trim()
+      .min(2, "Enter the name on the account.")
+      .max(60, "Keep the name under 60 characters."),
+    destinationId: z.string().trim().max(40).optional(),
+    identifier: z.string().trim().max(64).optional(),
+    bank: withdrawalBankSchema.optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (value.bank) {
+      const resolved = resolveBank(value.bank.countryCode, value.bank.bankId);
+      if (!resolved) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["bank", "bankId"],
+          message: "Choose a bank from the directory.",
+        });
+        return;
+      }
+
+      const checked = validateBankDetails(resolved.country, value.bank.details);
+      if (!checked.ok) {
+        ctx.addIssue({ code: "custom", path: ["bank", "details"], message: checked.message });
+      }
+      return;
+    }
+
+    if (!value.destinationId || !findWallet(value.destinationId)) {
+      ctx.addIssue({ code: "custom", path: ["destinationId"], message: "Choose a destination." });
+      return;
+    }
+
+    if (!value.identifier || value.identifier.length < 3) {
+      ctx.addIssue({ code: "custom", path: ["identifier"], message: "Enter the destination details." });
+    }
+  });
 
 export const depositCodeSchema = z
   .string()
